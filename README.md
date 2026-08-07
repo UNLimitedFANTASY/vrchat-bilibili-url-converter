@@ -28,6 +28,9 @@ https://biliplayer.91vrchat.com/player/?url=https://www.bilibili.com/video/BVxxx
 - 手动粘贴网址并一键生成新的播放器链接
 - 生成完成后自动复制到 Windows 剪贴板
 - 长网址在文本框内部水平滚动显示，避免文字溢出、重影或覆盖相邻控件
+- 支持多显示器窗口定位：关闭确认和前缀设置窗口会跟随主窗口所在显示器并居中显示
+- 支持高 DPI / 高分辨率缩放，窗口、字体、文本框、按钮和间距会按显示器缩放比例自动调整
+- 主窗口跨不同缩放比例的显示器移动时，会根据新的 DPI 自动重新布局
 - 自动监听剪贴板中的哔哩哔哩链接
 - 支持识别：
   - `bilibili.com`
@@ -93,14 +96,14 @@ https://biliplayer.91vrchat.com/player/?url=
 
 建议普通用户前往仓库右侧的 **Releases** 下载最新版本。
 
-当前稳定版 **v1.1.1** 提供：
+当前稳定版 **v1.1.2** 提供：
 
-- `Bili_URL_Converter_v1.1.1_x86.exe`
+- `Bili_URL_Converter_v1.1.2_x86.exe`
   - 兼容版本
   - 可用于 32 位 Windows
   - 同时兼容大多数 64 位 Windows 10 / Windows 11
 
-- `Bili_URL_Converter_v1.1.1_x64.exe`
+- `Bili_URL_Converter_v1.1.2_x64.exe`
   - 64 位原生版本
   - 适用于 64 位 Windows
 
@@ -227,6 +230,8 @@ CloseAction=0
 - System Tray
 - INI Portable Configuration
 - GDI 自绘界面
+- Per-Monitor DPI Awareness V2（支持时启用，旧系统自动回退）
+- 多显示器工作区定位与弹窗跟随
 - x86 / x64 Windows GUI 构建
 
 项目不依赖：
