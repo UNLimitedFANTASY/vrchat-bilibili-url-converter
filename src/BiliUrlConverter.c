@@ -1,9 +1,8 @@
 /*
-
- * Bili URL Converter v1.2.0 Portable - Single Instance + Start Hidden
+ * Bili URL Converter v1.3.0 Portable - Feedback Modes + Polished UI
  * Native Win32, no CRT, no .NET, no OLE/COM, no registry configuration.
  * Supports x86 and x64 from the same source.
-   */
+ */
 
 #ifdef _WIN64
 typedef unsigned long long ULONG_PTR;
@@ -236,6 +235,8 @@ typedef struct tagMONITORINFO {
 #define IDC_MONITOR         1008
 #define IDC_STATUS          1009
 #define IDC_START_HIDDEN    1010
+#define IDC_AUTO_SHOW       1011
+#define IDC_AUTO_NOTIFY     1012
 
 #define IDC_PFX_EDIT        2001
 #define IDC_PFX_SAVE        2002
@@ -253,6 +254,8 @@ typedef struct tagMONITORINFO {
 #define IDM_CLOSE_ASK       4004
 #define IDM_EXIT            4005
 #define IDM_START_HIDDEN    4006
+#define IDM_AUTO_SHOW       4007
+#define IDM_AUTO_NOTIFY     4008
 
 /* Win32 imports */
 DLLIMPORT void WINAPI ExitProcess(UINT);
@@ -265,6 +268,7 @@ DLLIMPORT HGLOBAL WINAPI GlobalAlloc(UINT, SIZE_T);
 DLLIMPORT LPVOID WINAPI GlobalLock(HGLOBAL);
 DLLIMPORT BOOL WINAPI GlobalUnlock(HGLOBAL);
 DLLIMPORT HGLOBAL WINAPI GlobalFree(HGLOBAL);
+DLLIMPORT void WINAPI Sleep(DWORD);
 
 DLLIMPORT ATOM WINAPI RegisterClassExW(const WNDCLASSEXW*);
 DLLIMPORT HWND WINAPI CreateWindowExW(DWORD,LPCWSTR,LPCWSTR,DWORD,int,int,int,int,HWND,HMENU,HINSTANCE,LPVOID);
@@ -342,16 +346,16 @@ void *memcpy(void *dst, const void *src, SIZE_T n) {
     BYTE *d=(BYTE*)dst; const BYTE *s=(const BYTE*)src; SIZE_T i; for(i=0;i<n;i++) d[i]=s[i]; return dst;
 }
 
-static const WCHAR APP_TITLE[] = L"VRChat 哔哩哔哩视频链接转换工具 v1.2.0";
+static const WCHAR APP_TITLE[] = L"VRChat 哔哩哔哩视频链接转换工具 v1.3.0";
 static const WCHAR MAIN_CLASS[] = L"VRChatBiliUrlConverter_Main";
-static const WCHAR PREFIX_CLASS[] = L"VRChatBiliUrlConverter_Prefix_120";
-static const WCHAR CLOSE_CLASS[] = L"VRChatBiliUrlConverter_Close_120";
+static const WCHAR PREFIX_CLASS[] = L"VRChatBiliUrlConverter_Prefix_130";
+static const WCHAR CLOSE_CLASS[] = L"VRChatBiliUrlConverter_Close_130";
 static const WCHAR CFG_SECTION[] = L"Settings";
 static const WCHAR DEFAULT_PREFIX[] = L"https://biliplayer.91vrchat.com/player/?url=";
 static const WCHAR CFG_NAME[] = L"BiliUrlConverter.ini";
 
 static HINSTANCE g_inst;
-static HWND g_main, g_source, g_result, g_monitor, g_status, g_startHiddenCheck;
+static HWND g_main, g_source, g_result, g_monitor, g_status, g_startHiddenCheck, g_autoShowCheck, g_autoNotifyCheck;
 static HWND g_btnCopy, g_btnGenerate, g_btnClear, g_btnPrefix, g_btnTray;
 static HWND g_prefixDlg, g_pfxSave, g_pfxDefault, g_pfxCancel;
 static HWND g_closeDlg, g_closeTray, g_closeExit, g_closeCancel;
@@ -361,6 +365,8 @@ static BOOL g_trayAdded=FALSE;
 static BOOL g_listenerAdded=FALSE;
 static BOOL g_monitorEnabled=TRUE;
 static BOOL g_startHidden=FALSE;
+static BOOL g_autoShowWindow=TRUE;
+static BOOL g_autoNotify=TRUE;
 static BOOL g_exiting=FALSE;
 static int g_closeAction=0; /* 0 ask, 1 tray, 2 exit */
 static BOOL g_configWritable=TRUE;
@@ -385,8 +391,8 @@ static HWND g_closeRemember;
 static void SetCtlFont(HWND h,HFONT f);
 
 /* ---------------- DPI + UI resources ---------------- */
-#define BASE_MAIN_W   920
-#define BASE_MAIN_H   600
+#define BASE_MAIN_W   940
+#define BASE_MAIN_H   720
 #define BASE_PREFIX_W 660
 #define BASE_PREFIX_H 315
 #define BASE_CLOSE_W  560
@@ -404,7 +410,7 @@ static PFN_GetDpiForSystem g_pGetDpiForSystem=NULL;
 static PFN_GetDpiForWindow g_pGetDpiForWindow=NULL;
 static UINT g_dpi=96;
 
-static HFONT g_fontTitle=NULL, g_fontSubtitle=NULL, g_fontSection=NULL, g_fontNormal=NULL, g_fontButton=NULL, g_fontSmall=NULL;
+static HFONT g_fontTitle=NULL, g_fontSubtitle=NULL, g_fontSection=NULL, g_fontNormal=NULL, g_fontButton=NULL, g_fontSmall=NULL, g_fontTiny=NULL;
 static HBRUSH g_brBg=NULL, g_brHeader=NULL, g_brCard=NULL, g_brAccent=NULL, g_brAccentDark=NULL, g_brAccentLight=NULL, g_brGreenLight=NULL, g_brDisabled=NULL, g_brDangerLight=NULL;
 static HPEN g_penBorder=NULL, g_penAccent=NULL, g_penGreen=NULL, g_penDanger=NULL;
 
@@ -452,9 +458,9 @@ static HFONT MakeFontForDpi(int logicalHeight,int weight,UINT dpi){
     return CreateFontW(ScaleForDpi(logicalHeight,dpi),0,0,0,weight,FALSE,FALSE,FALSE,DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,CLEARTYPE_QUALITY,DEFAULT_PITCH,L"Microsoft YaHei UI");
 }
 static void ApplyKnownFonts(void){
-    HWND normals[8]; int i;
-    normals[0]=g_source; normals[1]=g_result; normals[2]=g_monitor; normals[3]=g_startHiddenCheck; normals[4]=g_prefixEdit; normals[5]=g_closeRemember; normals[6]=NULL; normals[7]=NULL;
-    for(i=0;i<8;i++) if(normals[i]) SetCtlFont(normals[i],g_fontNormal);
+    HWND normals[10]; int i;
+    normals[0]=g_source; normals[1]=g_result; normals[2]=g_monitor; normals[3]=g_startHiddenCheck; normals[4]=g_autoShowCheck; normals[5]=g_autoNotifyCheck; normals[6]=g_prefixEdit; normals[7]=g_closeRemember; normals[8]=NULL; normals[9]=NULL;
+    for(i=0;i<10;i++) if(normals[i]) SetCtlFont(normals[i],g_fontNormal);
     if(g_status) SetCtlFont(g_status,g_fontSmall);
     /* Owner-draw buttons use g_fontButton while painting; WM_SETFONT is also updated for accessibility. */
     if(g_btnCopy)SetCtlFont(g_btnCopy,g_fontButton); if(g_btnGenerate)SetCtlFont(g_btnGenerate,g_fontButton);
@@ -463,7 +469,7 @@ static void ApplyKnownFonts(void){
     if(g_closeTray)SetCtlFont(g_closeTray,g_fontButton); if(g_closeExit)SetCtlFont(g_closeExit,g_fontButton); if(g_closeCancel)SetCtlFont(g_closeCancel,g_fontButton);
 }
 static void RebuildFonts(UINT dpi){
-    HFONT oldTitle=g_fontTitle,oldSubtitle=g_fontSubtitle,oldSection=g_fontSection,oldNormal=g_fontNormal,oldButton=g_fontButton,oldSmall=g_fontSmall;
+    HFONT oldTitle=g_fontTitle,oldSubtitle=g_fontSubtitle,oldSection=g_fontSection,oldNormal=g_fontNormal,oldButton=g_fontButton,oldSmall=g_fontSmall,oldTiny=g_fontTiny;
     if(dpi<72 || dpi>768)dpi=96; g_dpi=dpi;
     g_fontTitle=MakeFontForDpi(-23,FW_SEMIBOLD,dpi);
     g_fontSubtitle=MakeFontForDpi(-13,FW_NORMAL,dpi);
@@ -471,9 +477,10 @@ static void RebuildFonts(UINT dpi){
     g_fontNormal=MakeFontForDpi(-14,FW_NORMAL,dpi);
     g_fontButton=MakeFontForDpi(-14,FW_SEMIBOLD,dpi);
     g_fontSmall=MakeFontForDpi(-12,FW_NORMAL,dpi);
+    g_fontTiny=MakeFontForDpi(-11,FW_NORMAL,dpi);
     ApplyKnownFonts();
     if(oldTitle)DeleteObject((HGDIOBJ)oldTitle); if(oldSubtitle)DeleteObject((HGDIOBJ)oldSubtitle); if(oldSection)DeleteObject((HGDIOBJ)oldSection);
-    if(oldNormal)DeleteObject((HGDIOBJ)oldNormal); if(oldButton)DeleteObject((HGDIOBJ)oldButton); if(oldSmall)DeleteObject((HGDIOBJ)oldSmall);
+    if(oldNormal)DeleteObject((HGDIOBJ)oldNormal); if(oldButton)DeleteObject((HGDIOBJ)oldButton); if(oldSmall)DeleteObject((HGDIOBJ)oldSmall); if(oldTiny)DeleteObject((HGDIOBJ)oldTiny);
 }
 static void InitUiResources(void){
     g_fontTitle=MakeFontForDpi(-23,FW_SEMIBOLD,g_dpi);
@@ -482,25 +489,38 @@ static void InitUiResources(void){
     g_fontNormal=MakeFontForDpi(-14,FW_NORMAL,g_dpi);
     g_fontButton=MakeFontForDpi(-14,FW_SEMIBOLD,g_dpi);
     g_fontSmall=MakeFontForDpi(-12,FW_NORMAL,g_dpi);
+    g_fontTiny=MakeFontForDpi(-11,FW_NORMAL,g_dpi);
     g_brBg=CreateSolidBrush(CLR_BG); g_brHeader=CreateSolidBrush(CLR_HEADER); g_brCard=CreateSolidBrush(CLR_CARD);
     g_brAccent=CreateSolidBrush(CLR_ACCENT); g_brAccentDark=CreateSolidBrush(CLR_ACCENT_DARK); g_brAccentLight=CreateSolidBrush(CLR_ACCENT_LIGHT);
     g_brGreenLight=CreateSolidBrush(CLR_GREEN_LIGHT); g_brDisabled=CreateSolidBrush(CLR_DISABLED); g_brDangerLight=CreateSolidBrush(CLR_DANGER_LIGHT);
     g_penBorder=CreatePen(PS_SOLID,1,CLR_BORDER); g_penAccent=CreatePen(PS_SOLID,1,CLR_ACCENT); g_penGreen=CreatePen(PS_SOLID,1,CLR_GREEN); g_penDanger=CreatePen(PS_SOLID,1,CLR_DANGER);
 }
 static void FreeUiResources(void){
-    HGDIOBJ objs[18]; int i=0,j;
-    objs[i++]=(HGDIOBJ)g_fontTitle; objs[i++]=(HGDIOBJ)g_fontSubtitle; objs[i++]=(HGDIOBJ)g_fontSection; objs[i++]=(HGDIOBJ)g_fontNormal; objs[i++]=(HGDIOBJ)g_fontButton; objs[i++]=(HGDIOBJ)g_fontSmall;
+    HGDIOBJ objs[19]; int i=0,j;
+    objs[i++]=(HGDIOBJ)g_fontTitle; objs[i++]=(HGDIOBJ)g_fontSubtitle; objs[i++]=(HGDIOBJ)g_fontSection; objs[i++]=(HGDIOBJ)g_fontNormal; objs[i++]=(HGDIOBJ)g_fontButton; objs[i++]=(HGDIOBJ)g_fontSmall; objs[i++]=(HGDIOBJ)g_fontTiny;
     objs[i++]=(HGDIOBJ)g_brBg; objs[i++]=(HGDIOBJ)g_brHeader; objs[i++]=(HGDIOBJ)g_brCard; objs[i++]=(HGDIOBJ)g_brAccent; objs[i++]=(HGDIOBJ)g_brAccentDark; objs[i++]=(HGDIOBJ)g_brAccentLight; objs[i++]=(HGDIOBJ)g_brGreenLight; objs[i++]=(HGDIOBJ)g_brDisabled; objs[i++]=(HGDIOBJ)g_brDangerLight;
     objs[i++]=(HGDIOBJ)g_penBorder; objs[i++]=(HGDIOBJ)g_penAccent; objs[i++]=(HGDIOBJ)g_penGreen;
     for(j=0;j<i;j++) if(objs[j]) DeleteObject(objs[j]);
     if(g_penDanger) DeleteObject((HGDIOBJ)g_penDanger);
 }
 static void SetCtlFont(HWND h,HFONT f){ if(h&&f) SendMessageW(h,WM_SETFONT,(WPARAM)f,TRUE); }
-static void SetEditMargins(HWND h){ int m=S(12); if(h) SendMessageW(h,EM_SETMARGINS,EC_LEFTMARGIN|EC_RIGHTMARGIN,(LPARAM)((m & 0xffff) | ((m & 0xffff)<<16))); }
+static void SetEditMargins(HWND h){ int m=S(14); if(h) SendMessageW(h,EM_SETMARGINS,EC_LEFTMARGIN|EC_RIGHTMARGIN,(LPARAM)((m & 0xffff) | ((m & 0xffff)<<16))); }
 static void MoveCtl(HWND h,int x,int y,int w,int hh){ if(h)SetWindowPos(h,NULL,S(x),S(y),S(w),S(hh),SWP_NOZORDER|SWP_NOACTIVATE); }
 static HWND MakeButton(HWND parent,LPCWSTR text,int x,int y,int w,int h,int id){
     HWND b=CreateWindowExW(0,L"BUTTON",text,WS_CHILD|WS_VISIBLE|WS_TABSTOP|WS_CLIPSIBLINGS|BS_OWNERDRAW,S(x),S(y),S(w),S(h),parent,(HMENU)(ULONG_PTR)id,g_inst,0);
     SetCtlFont(b,g_fontButton); return b;
+}
+static HWND MakeToggle(HWND parent,LPCWSTR text,int x,int y,int w,int h,int id){
+    HWND b=CreateWindowExW(0,L"BUTTON",text,WS_CHILD|WS_VISIBLE|WS_TABSTOP|WS_CLIPSIBLINGS|BS_OWNERDRAW,S(x),S(y),S(w),S(h),parent,(HMENU)(ULONG_PTR)id,g_inst,0);
+    SetCtlFont(b,g_fontNormal); return b;
+}
+static BOOL IsToggleId(int id){ return id==IDC_MONITOR||id==IDC_START_HIDDEN||id==IDC_AUTO_SHOW||id==IDC_AUTO_NOTIFY; }
+static BOOL ToggleOnById(int id){
+    if(id==IDC_MONITOR)return g_monitorEnabled;
+    if(id==IDC_START_HIDDEN)return g_startHidden;
+    if(id==IDC_AUTO_SHOW)return g_autoShowWindow;
+    if(id==IDC_AUTO_NOTIFY)return g_autoNotify;
+    return FALSE;
 }
 static void DrawTextUi(HDC dc,LPCWSTR text,int l,int t,int r,int b,HFONT font,DWORD color,UINT flags){
     RECT rc; HGDIOBJ old; rc.left=S(l);rc.top=S(t);rc.right=S(r);rc.bottom=S(b); old=SelectObject(dc,(HGDIOBJ)font); SetBkMode(dc,TRANSPARENT); SetTextColor(dc,color); DrawTextW(dc,text,-1,&rc,flags); SelectObject(dc,old);
@@ -514,22 +534,43 @@ static void DrawRoundBox(HDC dc,int l,int t,int r,int b,HBRUSH br,HPEN pen,int r
 static void DrawRoundBoxUi(HDC dc,int l,int t,int r,int b,HBRUSH br,HPEN pen,int rad){ DrawRoundBox(dc,S(l),S(t),S(r),S(b),br,pen,S(rad)); }
 static void DrawButtonUi(DRAWITEMSTRUCT *di){
     WCHAR text[128]; HBRUSH br=g_brCard; HPEN pen=g_penBorder; DWORD tc=CLR_TEXT; int id=(int)di->CtlID; int pressed=(di->itemState&ODS_SELECTED)!=0;
+    if(IsToggleId(id)){
+        BOOL on=ToggleOnById(id); int l=di->rcItem.left,r=di->rcItem.right,t=di->rcItem.top,b=di->rcItem.bottom;
+        int swR=r-S(12), swL=swR-S(42), swT=t+((b-t)-S(22))/2, swB=swT+S(22), knob=S(16), kx;
+        HBRUSH track=on?((id==IDC_MONITOR)?g_brGreenLight:g_brAccentLight):g_brDisabled;
+        HPEN trackPen=on?((id==IDC_MONITOR)?g_penGreen:g_penAccent):g_penBorder;
+        DWORD labelColor=(di->itemState&ODS_DISABLED)?CLR_MUTED:CLR_TEXT;
+        DrawRoundBox(di->hDC,l+S(1),t+S(1),r-S(1),b-S(1),pressed?g_brDisabled:g_brCard,(di->itemState&ODS_FOCUS)?g_penAccent:g_penBorder,S(9));
+        GetWindowTextW(di->hwndItem,text,127);
+        DrawTextPx(di->hDC,text,l+S(12),t,r-S(70),b,g_fontNormal,labelColor,DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS);
+        DrawRoundBox(di->hDC,swL,swT,swR,swB,track,trackPen,S(11));
+        kx=on?(swR-S(3)-knob):(swL+S(3));
+        { HGDIOBJ ob=SelectObject(di->hDC,(HGDIOBJ)g_brCard),op=SelectObject(di->hDC,(HGDIOBJ)(on?trackPen:g_penBorder));
+          Ellipse(di->hDC,kx,swT+S(3),kx+knob,swT+S(3)+knob); SelectObject(di->hDC,op); SelectObject(di->hDC,ob); }
+        return;
+    }
     if(di->itemState&ODS_DISABLED){br=g_brDisabled;pen=g_penBorder;tc=CLR_MUTED;}
     else if(id==IDC_GENERATE||id==IDC_PFX_SAVE||id==IDC_CLOSE_TRAY){br=pressed?g_brAccentDark:g_brAccent;pen=g_penAccent;tc=RGBX(255,255,255);}
     else if(id==IDC_CLOSE_EXIT){br=pressed?g_brDangerLight:g_brCard;pen=g_penDanger;tc=CLR_DANGER;}
-    else if(id==IDC_PREFIX||id==IDM_PREFIX){br=pressed?g_brAccentLight:g_brCard;pen=g_penAccent;tc=CLR_ACCENT_DARK;}
+    else if(id==IDC_COPY||id==IDC_PREFIX||id==IDM_PREFIX){br=pressed?g_brAccentLight:g_brCard;pen=g_penAccent;tc=CLR_ACCENT_DARK;}
     else {br=pressed?g_brDisabled:g_brCard;pen=(di->itemState&ODS_FOCUS)?g_penAccent:g_penBorder;tc=CLR_TEXT;}
     DrawRoundBox(di->hDC,di->rcItem.left+S(1),di->rcItem.top+S(1),di->rcItem.right-S(1),di->rcItem.bottom-S(1),br,pen,S(10));
     GetWindowTextW(di->hwndItem,text,127);
     DrawTextPx(di->hDC,text,di->rcItem.left+S(8),di->rcItem.top+(pressed?S(1):0),di->rcItem.right-S(8),di->rcItem.bottom+(pressed?S(1):0),g_fontButton,tc,DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS);
 }
 static void LayoutMainControls(void){
-    MoveCtl(g_source,50,174,800,34); MoveCtl(g_result,50,256,630,34); MoveCtl(g_btnCopy,696,251,156,42);
-    MoveCtl(g_btnGenerate,48,310,180,44); MoveCtl(g_btnClear,244,310,104,44); MoveCtl(g_btnPrefix,548,310,150,44); MoveCtl(g_btnTray,712,310,140,44);
-    MoveCtl(g_monitor,48,441,390,30); MoveCtl(g_startHiddenCheck,452,441,360,30); MoveCtl(g_status,92,501,760,34); SetEditMargins(g_source); SetEditMargins(g_result);
+    /* Native single-line EDIT controls paint from the top of their own client area.
+     * Keep the actual text controls at one font-line height and center those windows
+     * inside the 46 px painted input boxes. This produces balanced top/bottom space
+     * at every DPI instead of leaving a tall, visually top-aligned 32 px text area. */
+    MoveCtl(g_source,54,204,832,22); MoveCtl(g_result,54,284,642,22); MoveCtl(g_btnCopy,714,272,174,46);
+    MoveCtl(g_btnGenerate,50,334,188,46); MoveCtl(g_btnClear,254,334,108,46); MoveCtl(g_btnPrefix,574,334,164,46); MoveCtl(g_btnTray,752,334,136,46);
+    MoveCtl(g_monitor,58,518,378,34); MoveCtl(g_startHiddenCheck,58,558,378,34);
+    MoveCtl(g_autoShowCheck,490,518,386,34); MoveCtl(g_autoNotifyCheck,490,558,386,34);
+    MoveCtl(g_status,116,653,758,20); SetEditMargins(g_source); SetEditMargins(g_result);
 }
 static void LayoutPrefixControls(void){
-    MoveCtl(g_prefixEdit,46,137,568,36); MoveCtl(g_pfxSave,42,216,168,42); MoveCtl(g_pfxDefault,226,216,142,42); MoveCtl(g_pfxCancel,384,216,112,42); SetEditMargins(g_prefixEdit);
+    MoveCtl(g_prefixEdit,48,144,564,22); MoveCtl(g_pfxSave,42,216,168,42); MoveCtl(g_pfxDefault,226,216,142,42); MoveCtl(g_pfxCancel,384,216,112,42); SetEditMargins(g_prefixEdit);
 }
 static void LayoutCloseControls(void){
     MoveCtl(g_closeRemember,44,188,340,30); MoveCtl(g_closeTray,44,238,190,42); MoveCtl(g_closeExit,250,238,132,42); MoveCtl(g_closeCancel,398,238,100,42);
@@ -558,30 +599,78 @@ static void RestoreMainDpiAfterModal(void){
     UINT d=GetWindowDpiSafe(g_main); SetUiDpi(d); LayoutMainControls(); InvalidateRect(g_main,NULL,TRUE); UpdateWindow(g_main);
 }
 static void PaintMainUi(HWND hwnd,HDC dc){
-    RECT rc; HGDIOBJ ob,op; BOOL defPrefix=weq(g_prefix,DEFAULT_PREFIX);
+    RECT rc; BOOL defPrefix=weq(g_prefix,DEFAULT_PREFIX); LPCWSTR feedbackMode;
+    if(!g_autoShowWindow && !g_autoNotify) feedbackMode=L"静默模式";
+    else if(!g_autoShowWindow && g_autoNotify) feedbackMode=L"仅通知";
+    else if(g_autoShowWindow && !g_autoNotify) feedbackMode=L"仅窗口";
+    else feedbackMode=L"窗口 + 通知";
     GetClientRect(hwnd,&rc); FillRect(dc,&rc,g_brBg);
-    { RECT h=rc; h.left=0;h.top=0;h.bottom=S(90); FillRect(dc,&h,g_brHeader); h.top=S(88);h.bottom=S(90);FillRect(dc,&h,g_brAccent); }
-    if(g_icon) DrawIconEx(dc,S(28),S(22),g_icon,S(44),S(44),0,NULL,DI_NORMAL);
-    DrawTextUi(dc,L"VRChat 哔哩哔哩视频链接转换工具",88,18,650,50,g_fontTitle,CLR_TEXT,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
-    DrawTextUi(dc,L"面向 VRChat 视频播放器 · 自动识别并转换 Bilibili 链接",88,50,700,74,g_fontSubtitle,CLR_MUTED,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
-    DrawRoundBoxUi(dc,744,24,872,56,g_brAccentLight,g_penAccent,16);
-    DrawTextUi(dc,L"v1.2.0  PORTABLE",750,24,866,56,g_fontSmall,CLR_ACCENT_DARK,DT_CENTER|DT_VCENTER|DT_SINGLELINE);
 
-    DrawRoundBoxUi(dc,27,109,879,363,g_brDisabled,g_penBorder,18); DrawRoundBoxUi(dc,24,106,876,360,g_brCard,g_penBorder,18);
-    DrawTextUi(dc,L"网址转换",48,120,180,146,g_fontSection,CLR_TEXT,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
-    DrawTextUi(dc,L"粘贴原始哔哩哔哩网址，也可以使用剪贴板自动监听。",155,121,760,145,g_fontSmall,CLR_MUTED,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
-    DrawTextUi(dc,L"原始网址",48,148,160,169,g_fontSmall,CLR_MUTED,DT_LEFT|DT_VCENTER|DT_SINGLELINE); DrawRoundBoxUi(dc,46,170,854,212,g_brCard,g_penBorder,9);
-    DrawTextUi(dc,L"生成后的网址",48,228,180,249,g_fontSmall,CLR_MUTED,DT_LEFT|DT_VCENTER|DT_SINGLELINE); DrawRoundBoxUi(dc,46,252,684,294,g_brCard,g_penBorder,9);
-    
-    DrawRoundBoxUi(dc,27,381,879,481,g_brDisabled,g_penBorder,18); DrawRoundBoxUi(dc,24,378,876,478,g_brCard,g_penBorder,18);
-    DrawTextUi(dc,L"自动化与设置",48,391,220,417,g_fontSection,CLR_TEXT,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
-    DrawTextUi(dc,defPrefix?L"当前使用默认网址前缀":L"当前使用自定义网址前缀",48,418,310,440,g_fontSmall,CLR_MUTED,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
-    if(g_monitorEnabled){ DrawRoundBoxUi(dc,735,394,852,424,g_brGreenLight,g_penGreen,15); DrawTextUi(dc,L"● 监听已开启",742,394,846,424,g_fontSmall,CLR_GREEN,DT_CENTER|DT_VCENTER|DT_SINGLELINE); }
-    else { DrawRoundBoxUi(dc,735,394,852,424,g_brDisabled,g_penBorder,15); DrawTextUi(dc,L"○ 监听已关闭",742,394,846,424,g_fontSmall,CLR_MUTED,DT_CENTER|DT_VCENTER|DT_SINGLELINE); }
-    ob=SelectObject(dc,(HGDIOBJ)(g_monitorEnabled?g_brAccent:g_brDisabled)); op=SelectObject(dc,(HGDIOBJ)(g_monitorEnabled?g_penAccent:g_penBorder));
-    Ellipse(dc,S(31),S(510),S(41),S(520)); SelectObject(dc,op); SelectObject(dc,ob);
-    DrawTextUi(dc,L"状态",48,502,88,528,g_fontSmall,CLR_MUTED,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
+    /* Header */
+    { RECT h=rc; h.left=0;h.top=0;h.bottom=S(102); FillRect(dc,&h,g_brHeader); h.top=S(100);h.bottom=S(102);FillRect(dc,&h,g_brAccent); }
+    if(g_icon) DrawIconEx(dc,S(30),S(25),g_icon,S(46),S(46),0,NULL,DI_NORMAL);
+    DrawTextUi(dc,L"VRChat 哔哩哔哩视频链接转换工具",92,18,670,52,g_fontTitle,CLR_TEXT,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
+    DrawTextUi(dc,L"VRChat 视频播放器链接转换 · 本地运行 · Portable",92,53,710,79,g_fontSubtitle,CLR_MUTED,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
+    DrawRoundBoxUi(dc,755,25,900,59,g_brAccentLight,g_penAccent,17);
+    DrawTextUi(dc,L"v1.3.0  PORTABLE",765,25,890,59,g_fontSmall,CLR_ACCENT_DARK,DT_CENTER|DT_VCENTER|DT_SINGLELINE);
 
+    /* Conversion card */
+    DrawRoundBoxUi(dc,29,124,915,394,g_brDisabled,g_penBorder,20);
+    DrawRoundBoxUi(dc,25,120,911,390,g_brCard,g_penBorder,20);
+    DrawRoundBoxUi(dc,48,137,82,167,g_brAccentLight,g_penAccent,15);
+    DrawTextUi(dc,L"01",48,137,82,167,g_fontSmall,CLR_ACCENT_DARK,DT_CENTER|DT_VCENTER|DT_SINGLELINE);
+    DrawTextUi(dc,L"网址转换",94,136,220,166,g_fontSection,CLR_TEXT,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
+    DrawTextUi(dc,L"粘贴原始网址，或让剪贴板监听在后台自动完成转换。",205,139,700,165,g_fontSmall,CLR_MUTED,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
+    DrawRoundBoxUi(dc,774,138,888,166,defPrefix?g_brDisabled:g_brAccentLight,defPrefix?g_penBorder:g_penAccent,14);
+    DrawTextUi(dc,defPrefix?L"默认前缀":L"自定义前缀",782,138,880,166,g_fontSmall,defPrefix?CLR_MUTED:CLR_ACCENT_DARK,DT_CENTER|DT_VCENTER|DT_SINGLELINE);
+
+    DrawTextUi(dc,L"原始网址",52,171,180,193,g_fontSmall,CLR_MUTED,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
+    DrawRoundBoxUi(dc,48,192,892,238,g_brCard,g_penBorder,11);
+    DrawTextUi(dc,L"生成后的网址",52,251,200,273,g_fontSmall,CLR_MUTED,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
+    DrawRoundBoxUi(dc,48,272,702,318,g_brCard,g_penBorder,11);
+
+    /* Automation card */
+    DrawRoundBoxUi(dc,29,414,915,610,g_brDisabled,g_penBorder,20);
+    DrawRoundBoxUi(dc,25,410,911,606,g_brCard,g_penBorder,20);
+    DrawRoundBoxUi(dc,48,427,82,457,g_brGreenLight,g_penGreen,15);
+    DrawTextUi(dc,L"02",48,427,82,457,g_fontSmall,CLR_GREEN,DT_CENTER|DT_VCENTER|DT_SINGLELINE);
+    DrawTextUi(dc,L"自动化与后台",94,426,260,456,g_fontSection,CLR_TEXT,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
+    DrawTextUi(dc,L"常驻托盘时也可以从右键菜单快速切换这些设置。",258,430,670,454,g_fontSmall,CLR_MUTED,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
+    if(g_monitorEnabled){
+        DrawRoundBoxUi(dc,766,428,888,458,g_brGreenLight,g_penGreen,15);
+        DrawTextUi(dc,L"● 监听运行中",774,428,880,458,g_fontSmall,CLR_GREEN,DT_CENTER|DT_VCENTER|DT_SINGLELINE);
+    }else{
+        DrawRoundBoxUi(dc,766,428,888,458,g_brDisabled,g_penBorder,15);
+        DrawTextUi(dc,L"○ 监听已关闭",774,428,880,458,g_fontSmall,CLR_MUTED,DT_CENTER|DT_VCENTER|DT_SINGLELINE);
+    }
+
+    /* Balanced setting panels */
+    DrawRoundBoxUi(dc,46,472,450,594,g_brBg,g_penBorder,14);
+    DrawTextUi(dc,L"后台运行",58,480,174,502,g_fontSmall,CLR_TEXT,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
+    DrawTextUi(dc,L"控制监听与程序启动方式",58,500,310,518,g_fontTiny,CLR_MUTED,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
+
+    DrawRoundBoxUi(dc,476,472,890,594,g_brBg,g_penBorder,14);
+    DrawTextUi(dc,L"自动转换反馈",490,480,640,502,g_fontSmall,CLR_TEXT,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
+    DrawTextUi(dc,L"控制转换完成后是否打扰当前操作",490,500,742,518,g_fontTiny,CLR_MUTED,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
+
+    /* Status strip */
+    DrawRoundBoxUi(dc,25,621,911,681,g_brCard,g_penBorder,16);
+    DrawTextUi(dc,L"当前状态",50,631,108,650,g_fontTiny,CLR_MUTED,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
+    if(g_monitorEnabled){
+        DrawRoundBoxUi(dc,118,629,220,651,g_brGreenLight,g_penGreen,11);
+        DrawTextUi(dc,L"监听中",126,629,212,651,g_fontTiny,CLR_GREEN,DT_CENTER|DT_VCENTER|DT_SINGLELINE);
+    }else{
+        DrawRoundBoxUi(dc,118,629,220,651,g_brDisabled,g_penBorder,11);
+        DrawTextUi(dc,L"监听关闭",126,629,212,651,g_fontTiny,CLR_MUTED,DT_CENTER|DT_VCENTER|DT_SINGLELINE);
+    }
+    if(!g_autoShowWindow && !g_autoNotify){
+        DrawRoundBoxUi(dc,230,629,358,651,g_brDisabled,g_penBorder,11);
+        DrawTextUi(dc,feedbackMode,238,629,350,651,g_fontTiny,CLR_MUTED,DT_CENTER|DT_VCENTER|DT_SINGLELINE);
+    }else{
+        DrawRoundBoxUi(dc,230,629,358,651,g_brAccentLight,g_penAccent,11);
+        DrawTextUi(dc,feedbackMode,238,629,350,651,g_fontTiny,CLR_ACCENT_DARK,DT_CENTER|DT_VCENTER|DT_SINGLELINE);
+    }
+    DrawTextUi(dc,L"最近：",50,651,108,675,g_fontTiny,CLR_MUTED,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
 }
 static void PaintPrefixUi(HWND hwnd,HDC dc){
     RECT rc; GetClientRect(hwnd,&rc); FillRect(dc,&rc,g_brBg); {RECT h=rc;h.left=0;h.top=0;h.bottom=S(76);FillRect(dc,&h,g_brHeader);h.top=S(74);h.bottom=S(76);FillRect(dc,&h,g_brAccent);}
@@ -657,13 +746,17 @@ static void LoadSettings(void){
     if(g_prefix[0]==0) wcopy(g_prefix,DEFAULT_PREFIX,2048);
     GetPrivateProfileStringW(CFG_SECTION,L"Monitor",L"1",b,31,g_configPath); g_monitorEnabled=(w_to_int(b,1)!=0);
     GetPrivateProfileStringW(CFG_SECTION,L"StartHidden",L"0",b,31,g_configPath); g_startHidden=(w_to_int(b,0)!=0);
+    GetPrivateProfileStringW(CFG_SECTION,L"AutoShowWindow",L"1",b,31,g_configPath); g_autoShowWindow=(w_to_int(b,1)!=0);
+    GetPrivateProfileStringW(CFG_SECTION,L"AutoNotify",L"1",b,31,g_configPath); g_autoNotify=(w_to_int(b,1)!=0);
     GetPrivateProfileStringW(CFG_SECTION,L"CloseAction",L"0",b,31,g_configPath); g_closeAction=w_to_int(b,0); if(g_closeAction<0||g_closeAction>2)g_closeAction=0;
     /* Create/refresh portable config. Failure never blocks startup. */
     g_configWritable=TRUE;
-    if(!SaveSetting(L"Version",L"1.2.0")) g_configWritable=FALSE;
+    if(!SaveSetting(L"Version",L"1.3.0")) g_configWritable=FALSE;
     if(!SaveSetting(L"Prefix",g_prefix)) g_configWritable=FALSE;
     if(!SaveSetting(L"Monitor",g_monitorEnabled?L"1":L"0")) g_configWritable=FALSE;
     if(!SaveSetting(L"StartHidden",g_startHidden?L"1":L"0")) g_configWritable=FALSE;
+    if(!SaveSetting(L"AutoShowWindow",g_autoShowWindow?L"1":L"0")) g_configWritable=FALSE;
+    if(!SaveSetting(L"AutoNotify",g_autoNotify?L"1":L"0")) g_configWritable=FALSE;
     { WCHAR c[16]; int_to_w(g_closeAction,c); if(!SaveSetting(L"CloseAction",c)) g_configWritable=FALSE; }
 }
 
@@ -711,22 +804,38 @@ static BOOL ExtractBiliUrl(const WCHAR *text,WCHAR *out,int cap){
 static BOOL BuildGenerated(const WCHAR *source){ return append_two(g_prefix,source,g_resultBuf,8192); }
 
 /* ---------------- Clipboard ---------------- */
+/* Clipboard ownership on Windows is exclusive. Browsers, IMEs, screenshot tools,
+ * clipboard managers and remote-desktop software can briefly hold it. Instead of
+ * failing immediately, retry for a short bounded period so transient contention is
+ * normally invisible to the user. */
+static BOOL OpenClipboardRetry(HWND owner,int attempts,DWORD delayMs){
+    int i; if(attempts<1) attempts=1;
+    for(i=0;i<attempts;i++){
+        if(OpenClipboard(owner)) return TRUE;
+        if(i+1<attempts) Sleep(delayMs);
+    }
+    return FALSE;
+}
 static BOOL CopyToClipboard(HWND owner,const WCHAR *text){
     int n=wlen(text),i; HGLOBAL h; WCHAR *p;
-    if(!OpenClipboard(owner)){
-        SetWindowTextW(g_status,L"剪贴板暂时被其他程序占用，请稍后再点击“复制结果”。");
-        return FALSE;
-    }
-    if(!EmptyClipboard()){ CloseClipboard(); return FALSE; }
     h=GlobalAlloc(GMEM_MOVEABLE,(SIZE_T)((n+1)*2));
-    if(!h){ CloseClipboard(); return FALSE; }
+    if(!h){ SetWindowTextW(g_status,L"内存不足，无法复制生成结果。"); return FALSE; }
     p=(WCHAR*)GlobalLock(h);
-    if(!p){ GlobalFree(h); CloseClipboard(); return FALSE; }
+    if(!p){ GlobalFree(h); SetWindowTextW(g_status,L"无法准备剪贴板数据。"); return FALSE; }
     for(i=0;i<=n;i++) p[i]=text[i];
     GlobalUnlock(h);
-    if(!SetClipboardData(CF_UNICODETEXT,h)){
-        GlobalFree(h); CloseClipboard(); return FALSE;
+
+    /* 10 attempts, 25 ms apart: at most ~225 ms extra wait. */
+    if(!OpenClipboardRetry(owner,10,25)){
+        GlobalFree(h);
+        SetWindowTextW(g_status,L"剪贴板持续被其他程序占用，自动重试后仍无法复制，请稍后再试。");
+        return FALSE;
     }
+    if(!EmptyClipboard()){ CloseClipboard(); GlobalFree(h); SetWindowTextW(g_status,L"无法清空系统剪贴板，请稍后再试。"); return FALSE; }
+    if(!SetClipboardData(CF_UNICODETEXT,h)){
+        CloseClipboard(); GlobalFree(h); SetWindowTextW(g_status,L"无法写入系统剪贴板，请稍后再试。"); return FALSE;
+    }
+    /* Ownership of h transfers to Windows after SetClipboardData succeeds. */
     wcopy(g_lastGenerated,text,8192);
     CloseClipboard();
     return TRUE;
@@ -735,7 +844,8 @@ static BOOL ReadClipboardText(HWND owner,WCHAR *out,int cap){
     HANDLE h; const WCHAR *p; int i=0;
     out[0]=0;
     if(!IsClipboardFormatAvailable(CF_UNICODETEXT)) return FALSE;
-    if(!OpenClipboard(owner)) return FALSE;
+    /* Reads use a shorter retry window to keep clipboard monitoring responsive. */
+    if(!OpenClipboardRetry(owner,6,15)) return FALSE;
     h=GetClipboardData(CF_UNICODETEXT);
     if(!h){CloseClipboard();return FALSE;}
     p=(const WCHAR*)GlobalLock((HGLOBAL)h);
@@ -751,7 +861,7 @@ static void AddTrayIcon(void){
     memset(&g_nid,0,sizeof(g_nid));
     g_nid.cbSize=(DWORD)sizeof(g_nid); g_nid.hWnd=g_main; g_nid.uID=1;
     g_nid.uFlags=NIF_MESSAGE|NIF_ICON|NIF_TIP; g_nid.uCallbackMessage=WM_TRAYICON; g_nid.hIcon=g_icon;
-    FillFixed(g_nid.szTip,128,L"VRChat 哔哩哔哩视频链接转换工具 v1.2.0");
+    FillFixed(g_nid.szTip,128,L"VRChat 哔哩哔哩视频链接转换工具 v1.3.0");
     if(Shell_NotifyIconW(NIM_ADD,&g_nid)) g_trayAdded=TRUE;
 }
 static void RemoveTrayIcon(void){ if(g_trayAdded){Shell_NotifyIconW(NIM_DELETE,&g_nid);g_trayAdded=FALSE;} }
@@ -766,9 +876,17 @@ static void ShowMain(void){
 }
 static void HideToTray(void){ AddTrayIcon(); ShowWindow(g_main,SW_HIDE); }
 
+static void RefreshControlNow(HWND h){
+    if(h){ InvalidateRect(h,NULL,TRUE); UpdateWindow(h); }
+}
+static void RefreshMainVisualState(void){
+    if(g_main){ InvalidateRect(g_main,NULL,TRUE); UpdateWindow(g_main); }
+}
+
 /* ---------------- Startup behavior ---------------- */
 static void UpdateStartHiddenUI(void){
-    if(g_startHiddenCheck) SendMessageW(g_startHiddenCheck,BM_SETCHECK,g_startHidden?BST_CHECKED:BST_UNCHECKED,0);
+    RefreshControlNow(g_startHiddenCheck);
+    RefreshMainVisualState();
 }
 static void SetStartHidden(BOOL enabled,BOOL persist){
     g_startHidden=enabled?TRUE:FALSE;
@@ -780,8 +898,32 @@ static void SetStartHidden(BOOL enabled,BOOL persist){
     }
 }
 
+static void UpdateAutoFeedbackUI(void){
+    RefreshControlNow(g_autoShowCheck);
+    RefreshControlNow(g_autoNotifyCheck);
+    RefreshMainVisualState();
+}
+static void SetAutoShowWindow(BOOL enabled,BOOL persist){
+    g_autoShowWindow=enabled?TRUE:FALSE; UpdateAutoFeedbackUI();
+    if(persist){
+        SaveIntSetting(L"AutoShowWindow",g_autoShowWindow?1:0);
+        if(!g_configWritable) SetWindowTextW(g_status,L"自动弹窗设置已临时修改，但当前目录不可写，无法保存。");
+        else if(!g_autoShowWindow && !g_autoNotify) SetWindowTextW(g_status,L"自动转换已进入静默模式：不弹窗口，也不发送通知。");
+        else SetWindowTextW(g_status,g_autoShowWindow?L"自动转换完成后会显示主窗口。":L"自动转换完成后不会主动弹出主窗口。");
+    }
+}
+static void SetAutoNotify(BOOL enabled,BOOL persist){
+    g_autoNotify=enabled?TRUE:FALSE; UpdateAutoFeedbackUI();
+    if(persist){
+        SaveIntSetting(L"AutoNotify",g_autoNotify?1:0);
+        if(!g_configWritable) SetWindowTextW(g_status,L"系统通知设置已临时修改，但当前目录不可写，无法保存。");
+        else if(!g_autoShowWindow && !g_autoNotify) SetWindowTextW(g_status,L"自动转换已进入静默模式：不弹窗口，也不发送通知。");
+        else SetWindowTextW(g_status,g_autoNotify?L"自动转换完成后会发送系统托盘通知。":L"自动转换完成后不会发送系统通知。");
+    }
+}
+
 /* ---------------- Monitor ---------------- */
-static void UpdateMonitorUI(void){ if(g_monitor) SendMessageW(g_monitor,BM_SETCHECK,g_monitorEnabled?BST_CHECKED:BST_UNCHECKED,0); }
+static void UpdateMonitorUI(void){ RefreshControlNow(g_monitor); RefreshMainVisualState(); }
 static void SetMonitor(BOOL enabled,BOOL persist){
     if(enabled){
         if(!g_listenerAdded){
@@ -802,6 +944,7 @@ static void SetMonitor(BOOL enabled,BOOL persist){
     }
 }
 static void HandleClipboardUpdate(void){
+    BOOL copied;
     if(!g_monitorEnabled) return;
     if(!ReadClipboardText(g_main,g_clipBuf,8192)) return;
     trim_ws(g_clipBuf);
@@ -811,22 +954,31 @@ static void HandleClipboardUpdate(void){
     if(!ExtractBiliUrl(g_clipBuf,g_foundBuf,4096)) return;
     SetEditTextStable(g_source,g_foundBuf); wcopy(g_sourceBuf,g_foundBuf,4096);
     if(!BuildGenerated(g_foundBuf)){
-        SetWindowTextW(g_status,L"网址过长，无法生成。请缩短自定义前缀后重试。"); ShowMain(); return;
+        SetWindowTextW(g_status,L"网址过长，无法生成。请缩短自定义前缀后重试。");
+        if(g_autoShowWindow) ShowMain();
+        if(g_autoNotify) TrayBalloon(L"自动转换失败",L"网址过长，无法生成转换后的链接。");
+        return;
     }
     SetEditTextStable(g_result,g_resultBuf);
-    if(CopyToClipboard(g_main,g_resultBuf)) SetWindowTextW(g_status,L"检测到哔哩哔哩网址，已自动生成并复制新网址。");
-    ShowMain(); MessageBeep(MB_ICONINFORMATION); TrayBalloon(L"已自动转换",L"检测到哔哩哔哩网址，新网址已生成并复制到剪贴板。");
+    copied=CopyToClipboard(g_main,g_resultBuf);
+    if(copied){
+        SetWindowTextW(g_status,L"检测到哔哩哔哩网址，已自动生成并复制新网址。");
+        if(g_autoShowWindow) ShowMain();
+        if(g_autoNotify) TrayBalloon(L"已自动转换",L"新网址已生成并复制到剪贴板。");
+    }else{
+        if(g_autoShowWindow) ShowMain();
+        if(g_autoNotify) TrayBalloon(L"自动转换未完成",L"链接已生成，但剪贴板持续被占用，未能自动复制。");
+    }
 }
 
 /* Force a clean repaint after long text changes. Combined with WS_CLIPCHILDREN,
-
  * this prevents the parent card background from painting over scrolling EDIT controls. */
-   static void SetEditTextStable(HWND h,const WCHAR *text){
+static void SetEditTextStable(HWND h,const WCHAR *text){
     if(!h) return;
     SetWindowTextW(h,text);
     InvalidateRect(h,NULL,TRUE);
     UpdateWindow(h);
-   }
+}
 
 /* ---------------- Actions ---------------- */
 static void GenerateManual(BOOL doCopy){
@@ -850,7 +1002,7 @@ static LRESULT CALLBACK PrefixProc2(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
     switch(msg){
     case WM_CREATE:
         g_prefixDlg=hwnd;
-        g_prefixEdit=CreateWindowExW(0,L"EDIT",g_prefix,WS_CHILD|WS_VISIBLE|WS_TABSTOP|WS_CLIPSIBLINGS|ES_AUTOHSCROLL,S(46),S(137),S(568),S(36),hwnd,(HMENU)(ULONG_PTR)IDC_PFX_EDIT,g_inst,0);
+        g_prefixEdit=CreateWindowExW(0,L"EDIT",g_prefix,WS_CHILD|WS_VISIBLE|WS_TABSTOP|WS_CLIPSIBLINGS|ES_AUTOHSCROLL,S(48),S(144),S(564),S(22),hwnd,(HMENU)(ULONG_PTR)IDC_PFX_EDIT,g_inst,0);
         SendMessageW(g_prefixEdit,EM_SETLIMITTEXT,1900,0); SetCtlFont(g_prefixEdit,g_fontNormal); SetEditMargins(g_prefixEdit);
         g_pfxSave=MakeButton(hwnd,L"保存并应用",42,216,168,42,IDC_PFX_SAVE); g_pfxDefault=MakeButton(hwnd,L"恢复默认",226,216,142,42,IDC_PFX_DEFAULT); g_pfxCancel=MakeButton(hwnd,L"取消",384,216,112,42,IDC_PFX_CANCEL);
         SetFocus(g_prefixEdit); return 0;
@@ -936,6 +1088,9 @@ static void ShowTrayMenu(void){
     AppendMenuW(menu,MF_STRING,IDM_SHOW,L"显示主窗口");
     AppendMenuW(menu,MF_STRING|(g_monitorEnabled?MF_CHECKED:MF_UNCHECKED),IDM_MONITOR,L"剪贴板监听");
     AppendMenuW(menu,MF_STRING|(g_startHidden?MF_CHECKED:MF_UNCHECKED),IDM_START_HIDDEN,L"启动后自动隐藏到托盘");
+    AppendMenuW(menu,MF_SEPARATOR,0,NULL);
+    AppendMenuW(menu,MF_STRING|(g_autoShowWindow?MF_CHECKED:MF_UNCHECKED),IDM_AUTO_SHOW,L"自动转换后显示主窗口");
+    AppendMenuW(menu,MF_STRING|(g_autoNotify?MF_CHECKED:MF_UNCHECKED),IDM_AUTO_NOTIFY,L"自动转换后显示通知");
     AppendMenuW(menu,MF_STRING,IDM_PREFIX,L"修改网址前缀...");
     AppendMenuW(menu,MF_STRING,IDM_CLOSE_ASK,L"关闭时再次询问");
     AppendMenuW(menu,MF_SEPARATOR,0,NULL);
@@ -946,6 +1101,8 @@ static void ShowTrayMenu(void){
     if(cmd==IDM_SHOW) ShowMain();
     else if(cmd==IDM_MONITOR) SetMonitor(!g_monitorEnabled,TRUE);
     else if(cmd==IDM_START_HIDDEN) SetStartHidden(!g_startHidden,TRUE);
+    else if(cmd==IDM_AUTO_SHOW) SetAutoShowWindow(!g_autoShowWindow,TRUE);
+    else if(cmd==IDM_AUTO_NOTIFY) SetAutoNotify(!g_autoNotify,TRUE);
     else if(cmd==IDM_PREFIX) ShowPrefixDialog();
     else if(cmd==IDM_CLOSE_ASK){g_closeAction=0;SaveIntSetting(L"CloseAction",0);SetWindowTextW(g_status,L"已恢复：点击关闭按钮时再次询问。");}
     else if(cmd==IDM_EXIT) ReallyExit();
@@ -956,14 +1113,16 @@ static LRESULT CALLBACK MainProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
     switch(msg){
     case WM_CREATE:
         g_main=hwnd; SetUiDpi(GetWindowDpiSafe(hwnd));
-        g_source=CreateWindowExW(0,L"EDIT",L"",WS_CHILD|WS_VISIBLE|WS_TABSTOP|WS_CLIPSIBLINGS|ES_AUTOHSCROLL,S(50),S(174),S(800),S(34),hwnd,(HMENU)(ULONG_PTR)IDC_SOURCE,g_inst,0); SendMessageW(g_source,EM_SETLIMITTEXT,3900,0); SetCtlFont(g_source,g_fontNormal); SetEditMargins(g_source);
-        g_result=CreateWindowExW(0,L"EDIT",L"",WS_CHILD|WS_VISIBLE|WS_TABSTOP|WS_CLIPSIBLINGS|ES_AUTOHSCROLL|ES_READONLY,S(50),S(256),S(630),S(34),hwnd,(HMENU)(ULONG_PTR)IDC_RESULT,g_inst,0); SetCtlFont(g_result,g_fontNormal); SetEditMargins(g_result);
-        g_btnCopy=MakeButton(hwnd,L"复制结果",696,251,156,42,IDC_COPY); g_btnGenerate=MakeButton(hwnd,L"生成并复制",48,310,180,44,IDC_GENERATE); g_btnClear=MakeButton(hwnd,L"清空",244,310,104,44,IDC_CLEAR); g_btnPrefix=MakeButton(hwnd,L"修改网址前缀",548,310,150,44,IDC_PREFIX); g_btnTray=MakeButton(hwnd,L"最小化到托盘",712,310,140,44,IDC_TRAY);
-        g_monitor=CreateWindowExW(0,L"BUTTON",L"自动监听剪贴板中的哔哩哔哩网址",WS_CHILD|WS_VISIBLE|WS_TABSTOP|WS_CLIPSIBLINGS|BS_AUTOCHECKBOX,S(48),S(441),S(390),S(30),hwnd,(HMENU)(ULONG_PTR)IDC_MONITOR,g_inst,0); SetCtlFont(g_monitor,g_fontNormal);
-        g_startHiddenCheck=CreateWindowExW(0,L"BUTTON",L"启动后自动隐藏到系统托盘",WS_CHILD|WS_VISIBLE|WS_TABSTOP|WS_CLIPSIBLINGS|BS_AUTOCHECKBOX,S(452),S(441),S(360),S(30),hwnd,(HMENU)(ULONG_PTR)IDC_START_HIDDEN,g_inst,0); SetCtlFont(g_startHiddenCheck,g_fontNormal);
-        g_status=CreateWindowExW(0,L"STATIC",L"",WS_CHILD|WS_VISIBLE|WS_CLIPSIBLINGS|SS_LEFT,S(92),S(501),S(760),S(34),hwnd,(HMENU)(ULONG_PTR)IDC_STATUS,g_inst,0); SetCtlFont(g_status,g_fontSmall);
-        UpdateMonitorUI(); UpdateStartHiddenUI(); AddTrayIcon(); SetMonitor(g_monitorEnabled,FALSE);
-        if(g_configWritable) SetWindowTextW(g_status,L"就绪。配置保存在程序运行目录的 BiliUrlConverter.ini 中。"); else SetWindowTextW(g_status,L"程序可运行，但当前目录不可写：设置无法保存。建议把 EXE 移到桌面或其他可写目录。"); return 0;
+        g_source=CreateWindowExW(0,L"EDIT",L"",WS_CHILD|WS_VISIBLE|WS_TABSTOP|WS_CLIPSIBLINGS|ES_AUTOHSCROLL,S(54),S(204),S(832),S(22),hwnd,(HMENU)(ULONG_PTR)IDC_SOURCE,g_inst,0); SendMessageW(g_source,EM_SETLIMITTEXT,3900,0); SetCtlFont(g_source,g_fontNormal); SetEditMargins(g_source);
+        g_result=CreateWindowExW(0,L"EDIT",L"",WS_CHILD|WS_VISIBLE|WS_TABSTOP|WS_CLIPSIBLINGS|ES_AUTOHSCROLL|ES_READONLY,S(54),S(284),S(642),S(22),hwnd,(HMENU)(ULONG_PTR)IDC_RESULT,g_inst,0); SetCtlFont(g_result,g_fontNormal); SetEditMargins(g_result);
+        g_btnCopy=MakeButton(hwnd,L"复制结果",714,272,174,46,IDC_COPY); g_btnGenerate=MakeButton(hwnd,L"生成并复制",50,334,188,46,IDC_GENERATE); g_btnClear=MakeButton(hwnd,L"清空",254,334,108,46,IDC_CLEAR); g_btnPrefix=MakeButton(hwnd,L"修改网址前缀",574,334,164,46,IDC_PREFIX); g_btnTray=MakeButton(hwnd,L"最小化到托盘",752,334,136,46,IDC_TRAY);
+        g_monitor=MakeToggle(hwnd,L"自动监听哔哩哔哩剪贴板网址",58,518,378,34,IDC_MONITOR);
+        g_startHiddenCheck=MakeToggle(hwnd,L"启动后自动隐藏到托盘",58,558,378,34,IDC_START_HIDDEN);
+        g_autoShowCheck=MakeToggle(hwnd,L"自动转换后显示主窗口",490,518,386,34,IDC_AUTO_SHOW);
+        g_autoNotifyCheck=MakeToggle(hwnd,L"自动转换后发送系统通知",490,558,386,34,IDC_AUTO_NOTIFY);
+        g_status=CreateWindowExW(0,L"STATIC",L"",WS_CHILD|WS_VISIBLE|WS_CLIPSIBLINGS|SS_LEFT,S(116),S(653),S(758),S(20),hwnd,(HMENU)(ULONG_PTR)IDC_STATUS,g_inst,0); SetCtlFont(g_status,g_fontSmall);
+        UpdateMonitorUI(); UpdateStartHiddenUI(); UpdateAutoFeedbackUI(); AddTrayIcon(); SetMonitor(g_monitorEnabled,FALSE);
+        if(g_configWritable) SetWindowTextW(g_status,L"就绪。后台监听、启动方式与转换反馈都可以独立设置。"); else SetWindowTextW(g_status,L"程序可运行，但当前目录不可写：设置无法保存。建议把 EXE 移到桌面或其他可写目录。"); return 0;
     case WM_DPICHANGED:
         { UINT nd=(UINT)(wp&0xffff); SetUiDpi(nd); ApplySuggestedDpiRect(hwnd,lp); LayoutMainControls(); InvalidateRect(hwnd,NULL,TRUE); return 0; }
     case WM_PAINT: { PAINTSTRUCT ps; HDC dc=BeginPaint(hwnd,&ps); PaintMainUi(hwnd,dc); EndPaint(hwnd,&ps); return 0; }
@@ -974,7 +1133,7 @@ static LRESULT CALLBACK MainProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
         SetBkMode((HDC)wp,TRANSPARENT); SetTextColor((HDC)wp,CLR_MUTED); if((HWND)lp==g_result){SetBkColor((HDC)wp,CLR_CARD);SetTextColor((HDC)wp,CLR_TEXT);return (LRESULT)g_brCard;} return (LRESULT)g_brBg;
     case WM_CTLCOLORBTN: SetBkColor((HDC)wp,CLR_CARD); SetTextColor((HDC)wp,CLR_TEXT); return (LRESULT)g_brCard;
     case WM_COMMAND:
-        if(((wp>>16)&0xffff)==BN_CLICKED){ int id=(int)(wp&0xffff); if(id==IDC_GENERATE){GenerateManual(TRUE);return 0;} if(id==IDC_COPY){CopyResult();return 0;} if(id==IDC_CLEAR){ClearAll();return 0;} if(id==IDC_PREFIX){ShowPrefixDialog();return 0;} if(id==IDC_TRAY){HideToTray();return 0;} if(id==IDC_MONITOR){BOOL e=SendMessageW(g_monitor,BM_GETCHECK,0,0)==BST_CHECKED;SetMonitor(e,TRUE);return 0;} if(id==IDC_START_HIDDEN){BOOL e=SendMessageW(g_startHiddenCheck,BM_GETCHECK,0,0)==BST_CHECKED;SetStartHidden(e,TRUE);return 0;} }
+        if(((wp>>16)&0xffff)==BN_CLICKED){ int id=(int)(wp&0xffff); if(id==IDC_GENERATE){GenerateManual(TRUE);return 0;} if(id==IDC_COPY){CopyResult();return 0;} if(id==IDC_CLEAR){ClearAll();return 0;} if(id==IDC_PREFIX){ShowPrefixDialog();return 0;} if(id==IDC_TRAY){HideToTray();return 0;} if(id==IDC_MONITOR){SetMonitor(!g_monitorEnabled,TRUE);return 0;} if(id==IDC_START_HIDDEN){SetStartHidden(!g_startHidden,TRUE);return 0;} if(id==IDC_AUTO_SHOW){SetAutoShowWindow(!g_autoShowWindow,TRUE);return 0;} if(id==IDC_AUTO_NOTIFY){SetAutoNotify(!g_autoNotify,TRUE);return 0;} }
         break;
     case WM_CLIPBOARDUPDATE: HandleClipboardUpdate(); return 0;
     case WM_SHOW_EXISTING: ShowMain(); return 0;
