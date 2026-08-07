@@ -47,6 +47,11 @@ https://biliplayer.91vrchat.com/player/?url=https://www.bilibili.com/video/BVxxx
   - 取消
 - 支持记住关闭行为
 - 所有配置保存在程序目录下的 `BiliUrlConverter.ini`
+- 支持单实例运行，防止程序重复开启
+- 已有实例运行时再次启动程序会直接恢复原窗口
+- 支持启动后自动隐藏到系统托盘
+- 启动隐藏功能可在主界面或托盘右键菜单中自由开启或关闭
+- 启动隐藏设置会保存到便携式 `BiliUrlConverter.ini`
 - 不使用注册表保存配置
 - 原生 Win32 实现
 - 提供 x86 与 x64 两种 Windows 构建
@@ -96,14 +101,14 @@ https://biliplayer.91vrchat.com/player/?url=
 
 建议普通用户前往仓库右侧的 **Releases** 下载最新版本。
 
-当前稳定版 **v1.1.2** 提供：
+当前稳定版 **v1.2.0** 提供：
 
-- `Bili_URL_Converter_v1.1.2_x86.exe`
+- `Bili_URL_Converter_v1.2.0_x86.exe`
   - 兼容版本
   - 可用于 32 位 Windows
   - 同时兼容大多数 64 位 Windows 10 / Windows 11
 
-- `Bili_URL_Converter_v1.1.2_x64.exe`
+- `Bili_URL_Converter_v1.2.0_x64.exe`
   - 64 位原生版本
   - 适用于 64 位 Windows
 
@@ -177,6 +182,7 @@ BiliUrlConverter.ini
 Prefix=https://biliplayer.91vrchat.com/player/?url=
 Monitor=1
 CloseAction=0
+StartHidden=0
 ```
 
 其中：
@@ -184,6 +190,8 @@ CloseAction=0
 - `Prefix`：网址生成前缀
 - `Monitor`：剪贴板监听开关
 - `CloseAction`：窗口关闭行为
+- `StartHidden=0`：程序启动后正常显示主窗口
+- `StartHidden=1`：程序启动后直接隐藏到系统托盘
 
 如需恢复默认配置：
 
