@@ -27,6 +27,7 @@ https://biliplayer.91vrchat.com/player/?url=https://www.bilibili.com/video/BVxxx
 - 面向 VRChat 视频播放器使用场景快速转换哔哩哔哩链接
 - 手动粘贴网址并一键生成新的播放器链接
 - 生成完成后自动复制到 Windows 剪贴板
+- 长网址在文本框内部水平滚动显示，避免文字溢出、重影或覆盖相邻控件
 - 自动监听剪贴板中的哔哩哔哩链接
 - 支持识别：
   - `bilibili.com`
@@ -92,14 +93,14 @@ https://biliplayer.91vrchat.com/player/?url=
 
 建议普通用户前往仓库右侧的 **Releases** 下载最新版本。
 
-v1.1 提供：
+当前稳定版 **v1.1.1** 提供：
 
-- `Bili_URL_Converter_v1.1_x86.exe`
+- `Bili_URL_Converter_v1.1.1_x86.exe`
   - 兼容版本
   - 可用于 32 位 Windows
   - 同时兼容大多数 64 位 Windows 10 / Windows 11
 
-- `Bili_URL_Converter_v1.1_x64.exe`
+- `Bili_URL_Converter_v1.1.1_x64.exe`
   - 64 位原生版本
   - 适用于 64 位 Windows
 

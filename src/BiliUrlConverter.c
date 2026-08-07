@@ -1,5 +1,5 @@
 /*
- * Bili URL Converter v1.1 Portable - Full Rewrite
+ * Bili URL Converter v1.1.1 Portable - UI Overflow Fix
  * Native Win32, no CRT, no .NET, no OLE/COM, no registry configuration.
  * Supports x86 and x64 from the same source.
  */
@@ -83,6 +83,8 @@ typedef struct _NOTIFYICONDATAW {
 #define WS_SYSMENU          0x00080000L
 #define WS_MINIMIZEBOX      0x00020000L
 #define WS_VISIBLE          0x10000000L
+#define WS_CLIPCHILDREN     0x02000000L
+#define WS_CLIPSIBLINGS     0x04000000L
 #define WS_CHILD            0x40000000L
 #define WS_POPUP            0x80000000L
 #define WS_TABSTOP          0x00010000L
@@ -318,10 +320,10 @@ void *memcpy(void *dst, const void *src, SIZE_T n) {
     BYTE *d=(BYTE*)dst; const BYTE *s=(const BYTE*)src; SIZE_T i; for(i=0;i<n;i++) d[i]=s[i]; return dst;
 }
 
-static const WCHAR APP_TITLE[] = L"哔哩哔哩网址自动转换工具 v1.1";
-static const WCHAR MAIN_CLASS[] = L"BiliUrlConv_Main_Rewrite_11";
-static const WCHAR PREFIX_CLASS[] = L"BiliUrlConv_Prefix_Rewrite_11";
-static const WCHAR CLOSE_CLASS[] = L"BiliUrlConv_Close_Rewrite_11";
+static const WCHAR APP_TITLE[] = L"VRChat 哔哩哔哩视频链接转换工具 v1.1.1";
+static const WCHAR MAIN_CLASS[] = L"BiliUrlConv_Main_Rewrite_111";
+static const WCHAR PREFIX_CLASS[] = L"BiliUrlConv_Prefix_Rewrite_111";
+static const WCHAR CLOSE_CLASS[] = L"BiliUrlConv_Close_Rewrite_111";
 static const WCHAR CFG_SECTION[] = L"Settings";
 static const WCHAR DEFAULT_PREFIX[] = L"https://biliplayer.91vrchat.com/player/?url=";
 static const WCHAR CFG_NAME[] = L"BiliUrlConverter.ini";
@@ -350,6 +352,7 @@ static BOOL g_modalDone=FALSE;
 static int g_modalResult=0;
 
 static BOOL weq(const WCHAR *a,const WCHAR *b);
+static void SetEditTextStable(HWND h,const WCHAR *text);
 
 /* ---------------- UI resources ---------------- */
 static HFONT g_fontTitle=NULL, g_fontSubtitle=NULL, g_fontSection=NULL, g_fontNormal=NULL, g_fontButton=NULL, g_fontSmall=NULL;
@@ -382,7 +385,7 @@ static void FreeUiResources(void){
 static void SetCtlFont(HWND h,HFONT f){ if(h&&f) SendMessageW(h,WM_SETFONT,(WPARAM)f,TRUE); }
 static void SetEditMargins(HWND h){ if(h) SendMessageW(h,EM_SETMARGINS,EC_LEFTMARGIN|EC_RIGHTMARGIN,(LPARAM)((12 & 0xffff) | (12<<16))); }
 static HWND MakeButton(HWND parent,LPCWSTR text,int x,int y,int w,int h,int id){
-    HWND b=CreateWindowExW(0,L"BUTTON",text,WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_OWNERDRAW,x,y,w,h,parent,(HMENU)(ULONG_PTR)id,g_inst,0);
+    HWND b=CreateWindowExW(0,L"BUTTON",text,WS_CHILD|WS_VISIBLE|WS_TABSTOP|WS_CLIPSIBLINGS|BS_OWNERDRAW,x,y,w,h,parent,(HMENU)(ULONG_PTR)id,g_inst,0);
     SetCtlFont(b,g_fontButton); return b;
 }
 static void DrawTextUi(HDC dc,LPCWSTR text,int l,int t,int r,int b,HFONT font,DWORD color,UINT flags){
@@ -408,10 +411,10 @@ static void PaintMainUi(HWND hwnd,HDC dc){
     rc.left=0;rc.top=0;rc.right=920;rc.bottom=90; FillRect(dc,&rc,g_brHeader);
     rc.left=0;rc.top=88;rc.right=920;rc.bottom=90; FillRect(dc,&rc,g_brAccent);
     if(g_icon) DrawIconEx(dc,28,22,g_icon,44,44,0,NULL,DI_NORMAL);
-    DrawTextUi(dc,L"哔哩哔哩网址自动转换工具",88,18,650,50,g_fontTitle,CLR_TEXT,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
-    DrawTextUi(dc,L"自动识别 Bilibili 链接 · 一键生成并复制播放器地址",88,50,680,74,g_fontSubtitle,CLR_MUTED,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
+    DrawTextUi(dc,L"VRChat 哔哩哔哩视频链接转换工具",88,18,650,50,g_fontTitle,CLR_TEXT,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
+    DrawTextUi(dc,L"面向 VRChat 视频播放器 · 自动识别并转换 Bilibili 链接",88,50,700,74,g_fontSubtitle,CLR_MUTED,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
     DrawRoundBox(dc,744,24,872,56,g_brAccentLight,g_penAccent,16);
-    DrawTextUi(dc,L"v1.1  PORTABLE",750,24,866,56,g_fontSmall,CLR_ACCENT_DARK,DT_CENTER|DT_VCENTER|DT_SINGLELINE);
+    DrawTextUi(dc,L"v1.1.1  PORTABLE",750,24,866,56,g_fontSmall,CLR_ACCENT_DARK,DT_CENTER|DT_VCENTER|DT_SINGLELINE);
 
     /* URL card */
     DrawRoundBox(dc,27,109,879,363,g_brDisabled,g_penBorder,18);
@@ -523,7 +526,7 @@ static void LoadSettings(void){
     GetPrivateProfileStringW(CFG_SECTION,L"CloseAction",L"0",b,31,g_configPath); g_closeAction=w_to_int(b,0); if(g_closeAction<0||g_closeAction>2)g_closeAction=0;
     /* Create/refresh portable config. Failure never blocks startup. */
     g_configWritable=TRUE;
-    if(!SaveSetting(L"Version",L"1.1")) g_configWritable=FALSE;
+    if(!SaveSetting(L"Version",L"1.1.1")) g_configWritable=FALSE;
     if(!SaveSetting(L"Prefix",g_prefix)) g_configWritable=FALSE;
     if(!SaveSetting(L"Monitor",g_monitorEnabled?L"1":L"0")) g_configWritable=FALSE;
     { WCHAR c[16]; int_to_w(g_closeAction,c); if(!SaveSetting(L"CloseAction",c)) g_configWritable=FALSE; }
@@ -613,7 +616,7 @@ static void AddTrayIcon(void){
     memset(&g_nid,0,sizeof(g_nid));
     g_nid.cbSize=(DWORD)sizeof(g_nid); g_nid.hWnd=g_main; g_nid.uID=1;
     g_nid.uFlags=NIF_MESSAGE|NIF_ICON|NIF_TIP; g_nid.uCallbackMessage=WM_TRAYICON; g_nid.hIcon=g_icon;
-    FillFixed(g_nid.szTip,128,L"哔哩哔哩网址自动转换工具 v1.1");
+    FillFixed(g_nid.szTip,128,L"VRChat 哔哩哔哩视频链接转换工具 v1.1.1");
     if(Shell_NotifyIconW(NIM_ADD,&g_nid)) g_trayAdded=TRUE;
 }
 static void RemoveTrayIcon(void){ if(g_trayAdded){Shell_NotifyIconW(NIM_DELETE,&g_nid);g_trayAdded=FALSE;} }
@@ -657,13 +660,22 @@ static void HandleClipboardUpdate(void){
     if(weq(g_clipBuf,g_lastGenerated)) return;
     if(wstarts(g_clipBuf,g_prefix)) return;
     if(!ExtractBiliUrl(g_clipBuf,g_foundBuf,4096)) return;
-    SetWindowTextW(g_source,g_foundBuf); wcopy(g_sourceBuf,g_foundBuf,4096);
+    SetEditTextStable(g_source,g_foundBuf); wcopy(g_sourceBuf,g_foundBuf,4096);
     if(!BuildGenerated(g_foundBuf)){
         SetWindowTextW(g_status,L"网址过长，无法生成。请缩短自定义前缀后重试。"); ShowMain(); return;
     }
-    SetWindowTextW(g_result,g_resultBuf);
+    SetEditTextStable(g_result,g_resultBuf);
     if(CopyToClipboard(g_main,g_resultBuf)) SetWindowTextW(g_status,L"检测到哔哩哔哩网址，已自动生成并复制新网址。");
     ShowMain(); MessageBeep(MB_ICONINFORMATION); TrayBalloon(L"已自动转换",L"检测到哔哩哔哩网址，新网址已生成并复制到剪贴板。");
+}
+
+/* Force a clean repaint after long text changes. Combined with WS_CLIPCHILDREN,
+ * this prevents the parent card background from painting over scrolling EDIT controls. */
+static void SetEditTextStable(HWND h,const WCHAR *text){
+    if(!h) return;
+    SetWindowTextW(h,text);
+    InvalidateRect(h,NULL,TRUE);
+    UpdateWindow(h);
 }
 
 /* ---------------- Actions ---------------- */
@@ -671,7 +683,7 @@ static void GenerateManual(BOOL doCopy){
     int n=GetWindowTextW(g_source,g_sourceBuf,4095); (void)n; trim_ws(g_sourceBuf);
     if(g_sourceBuf[0]==0){ SetWindowTextW(g_status,L"请先粘贴原始网址。"); SetFocus(g_source); return; }
     if(!BuildGenerated(g_sourceBuf)){ SetWindowTextW(g_status,L"网址过长，无法生成。请缩短自定义前缀。"); return; }
-    SetWindowTextW(g_result,g_resultBuf);
+    SetEditTextStable(g_result,g_resultBuf);
     if(doCopy){
         if(CopyToClipboard(g_main,g_resultBuf)) SetWindowTextW(g_status,L"新网址已生成并复制到剪贴板。");
     }else SetWindowTextW(g_status,L"已按新的前缀刷新生成结果。");
@@ -680,14 +692,14 @@ static void CopyResult(void){
     GetWindowTextW(g_result,g_resultBuf,8191); if(g_resultBuf[0]==0){SetWindowTextW(g_status,L"当前没有可复制的生成结果。");return;}
     if(CopyToClipboard(g_main,g_resultBuf)) SetWindowTextW(g_status,L"生成结果已复制到剪贴板。");
 }
-static void ClearAll(void){ g_sourceBuf[0]=g_resultBuf[0]=0; SetWindowTextW(g_source,L"");SetWindowTextW(g_result,L"");SetWindowTextW(g_status,L"已清空。");SetFocus(g_source); }
+static void ClearAll(void){ g_sourceBuf[0]=g_resultBuf[0]=0; SetEditTextStable(g_source,L"");SetEditTextStable(g_result,L"");SetWindowTextW(g_status,L"已清空。");SetFocus(g_source); }
 
 /* ---------------- Prefix dialog ---------------- */
 static HWND g_prefixEdit=NULL;
 static LRESULT CALLBACK PrefixProc2(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
     switch(msg){
     case WM_CREATE:
-        g_prefixEdit=CreateWindowExW(0,L"EDIT",g_prefix,WS_CHILD|WS_VISIBLE|WS_TABSTOP|ES_AUTOHSCROLL,46,137,568,36,hwnd,(HMENU)(ULONG_PTR)IDC_PFX_EDIT,g_inst,0);
+        g_prefixEdit=CreateWindowExW(0,L"EDIT",g_prefix,WS_CHILD|WS_VISIBLE|WS_TABSTOP|WS_CLIPSIBLINGS|ES_AUTOHSCROLL,46,137,568,36,hwnd,(HMENU)(ULONG_PTR)IDC_PFX_EDIT,g_inst,0);
         SendMessageW(g_prefixEdit,EM_SETLIMITTEXT,1900,0); SetCtlFont(g_prefixEdit,g_fontNormal); SetEditMargins(g_prefixEdit);
         MakeButton(hwnd,L"保存并应用",42,216,168,42,IDC_PFX_SAVE);
         MakeButton(hwnd,L"恢复默认",226,216,142,42,IDC_PFX_DEFAULT);
@@ -733,7 +745,7 @@ static int RunModal(HWND dlg){ MSG m; g_modalDone=FALSE; g_modalResult=0; Enable
     EnableWindow(g_main,TRUE); if(IsWindow(g_main)) SetForegroundWindow(g_main); return g_modalResult; }
 static void ShowPrefixDialog(void){
     HWND dlg; int sw=GetSystemMetrics(0),sh=GetSystemMetrics(1),x=(sw-660)/2,y=(sh-315)/2; RegisterPrefixClass();
-    dlg=CreateWindowExW(WS_EX_DLGMODALFRAME|WS_EX_TOPMOST,PREFIX_CLASS,L"修改网址前缀",WS_POPUP|WS_CAPTION|WS_SYSMENU,x,y,660,315,g_main,NULL,g_inst,NULL);
+    dlg=CreateWindowExW(WS_EX_DLGMODALFRAME|WS_EX_TOPMOST,PREFIX_CLASS,L"修改网址前缀",WS_POPUP|WS_CAPTION|WS_SYSMENU|WS_CLIPCHILDREN,x,y,660,315,g_main,NULL,g_inst,NULL);
     if(!dlg){MessageBoxW(g_main,L"无法打开前缀设置窗口。",APP_TITLE,MB_OK|MB_ICONERROR);return;}
     if(RunModal(dlg)==1){ GenerateManual(FALSE); SetWindowTextW(g_status,L"网址前缀已保存并应用。配置位于程序运行目录。"); InvalidateRect(g_main,NULL,FALSE); }
 }
@@ -743,7 +755,7 @@ static HWND g_closeRemember=NULL;
 static LRESULT CALLBACK CloseProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
     switch(msg){
     case WM_CREATE:
-        g_closeRemember=CreateWindowExW(0,L"BUTTON",L"记住我的选择，以后不再提醒",WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_AUTOCHECKBOX,44,188,340,30,hwnd,(HMENU)(ULONG_PTR)IDC_CLOSE_REMEMBER,g_inst,0);
+        g_closeRemember=CreateWindowExW(0,L"BUTTON",L"记住我的选择，以后不再提醒",WS_CHILD|WS_VISIBLE|WS_TABSTOP|WS_CLIPSIBLINGS|BS_AUTOCHECKBOX,44,188,340,30,hwnd,(HMENU)(ULONG_PTR)IDC_CLOSE_REMEMBER,g_inst,0);
         SetCtlFont(g_closeRemember,g_fontNormal);
         MakeButton(hwnd,L"最小化到系统托盘",44,238,190,42,IDC_CLOSE_TRAY);
         MakeButton(hwnd,L"退出程序",250,238,132,42,IDC_CLOSE_EXIT);
@@ -780,7 +792,7 @@ static void RegisterCloseClass(void){
 }
 static int ShowCloseDialog(void){
     HWND dlg; int sw=GetSystemMetrics(0),sh=GetSystemMetrics(1),x=(sw-560)/2,y=(sh-340)/2; RegisterCloseClass();
-    dlg=CreateWindowExW(WS_EX_DLGMODALFRAME|WS_EX_TOPMOST,CLOSE_CLASS,L"关闭确认",WS_POPUP|WS_CAPTION|WS_SYSMENU,x,y,560,340,g_main,NULL,g_inst,NULL);
+    dlg=CreateWindowExW(WS_EX_DLGMODALFRAME|WS_EX_TOPMOST,CLOSE_CLASS,L"关闭确认",WS_POPUP|WS_CAPTION|WS_SYSMENU|WS_CLIPCHILDREN,x,y,560,340,g_main,NULL,g_inst,NULL);
     if(!dlg) return 0; return RunModal(dlg);
 }
 
@@ -813,18 +825,18 @@ static LRESULT CALLBACK MainProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
     switch(msg){
     case WM_CREATE:
         g_main=hwnd;
-        g_source=CreateWindowExW(0,L"EDIT",L"",WS_CHILD|WS_VISIBLE|WS_TABSTOP|ES_AUTOHSCROLL,50,174,800,34,hwnd,(HMENU)(ULONG_PTR)IDC_SOURCE,g_inst,0);
+        g_source=CreateWindowExW(0,L"EDIT",L"",WS_CHILD|WS_VISIBLE|WS_TABSTOP|WS_CLIPSIBLINGS|ES_AUTOHSCROLL,50,174,800,34,hwnd,(HMENU)(ULONG_PTR)IDC_SOURCE,g_inst,0);
         SendMessageW(g_source,EM_SETLIMITTEXT,3900,0); SetCtlFont(g_source,g_fontNormal); SetEditMargins(g_source);
-        g_result=CreateWindowExW(0,L"EDIT",L"",WS_CHILD|WS_VISIBLE|WS_TABSTOP|ES_AUTOHSCROLL|ES_READONLY,50,256,630,34,hwnd,(HMENU)(ULONG_PTR)IDC_RESULT,g_inst,0);
+        g_result=CreateWindowExW(0,L"EDIT",L"",WS_CHILD|WS_VISIBLE|WS_TABSTOP|WS_CLIPSIBLINGS|ES_AUTOHSCROLL|ES_READONLY,50,256,630,34,hwnd,(HMENU)(ULONG_PTR)IDC_RESULT,g_inst,0);
         SetCtlFont(g_result,g_fontNormal); SetEditMargins(g_result);
         MakeButton(hwnd,L"复制结果",696,251,156,42,IDC_COPY);
         MakeButton(hwnd,L"生成并复制",48,310,180,44,IDC_GENERATE);
         MakeButton(hwnd,L"清空",244,310,104,44,IDC_CLEAR);
         MakeButton(hwnd,L"修改网址前缀",548,310,150,44,IDC_PREFIX);
         MakeButton(hwnd,L"最小化到托盘",712,310,140,44,IDC_TRAY);
-        g_monitor=CreateWindowExW(0,L"BUTTON",L"自动监听剪贴板中的哔哩哔哩网址",WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_AUTOCHECKBOX,48,441,390,30,hwnd,(HMENU)(ULONG_PTR)IDC_MONITOR,g_inst,0);
+        g_monitor=CreateWindowExW(0,L"BUTTON",L"自动监听剪贴板中的哔哩哔哩网址",WS_CHILD|WS_VISIBLE|WS_TABSTOP|WS_CLIPSIBLINGS|BS_AUTOCHECKBOX,48,441,390,30,hwnd,(HMENU)(ULONG_PTR)IDC_MONITOR,g_inst,0);
         SetCtlFont(g_monitor,g_fontNormal);
-        g_status=CreateWindowExW(0,L"STATIC",L"",WS_CHILD|WS_VISIBLE|SS_LEFT,92,501,760,34,hwnd,(HMENU)(ULONG_PTR)IDC_STATUS,g_inst,0);
+        g_status=CreateWindowExW(0,L"STATIC",L"",WS_CHILD|WS_VISIBLE|WS_CLIPSIBLINGS|SS_LEFT,92,501,760,34,hwnd,(HMENU)(ULONG_PTR)IDC_STATUS,g_inst,0);
         SetCtlFont(g_status,g_fontSmall);
         UpdateMonitorUI(); AddTrayIcon(); SetMonitor(g_monitorEnabled,FALSE);
         if(g_configWritable) SetWindowTextW(g_status,L"就绪。配置保存在程序运行目录的 BiliUrlConverter.ini 中。");
@@ -881,7 +893,7 @@ static int AppMain(void){
     InitUiResources();
     if(!RegisterMainClass()){MessageBoxW(NULL,L"程序窗口初始化失败。",APP_TITLE,MB_OK|MB_ICONERROR);return 1;}
     sw=GetSystemMetrics(0); sh=GetSystemMetrics(1); x=(sw-920)/2; y=(sh-600)/2;
-    hwnd=CreateWindowExW(0,MAIN_CLASS,APP_TITLE,WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX,x,y,920,600,NULL,NULL,g_inst,NULL);
+    hwnd=CreateWindowExW(0,MAIN_CLASS,APP_TITLE,WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX|WS_CLIPCHILDREN,x,y,920,600,NULL,NULL,g_inst,NULL);
     if(!hwnd){MessageBoxW(NULL,L"无法创建主窗口。",APP_TITLE,MB_OK|MB_ICONERROR);return 2;}
     g_main=hwnd; SendMessageW(hwnd,WM_SETICON,ICON_BIG,(LPARAM)g_icon); SendMessageW(hwnd,WM_SETICON,ICON_SMALL,(LPARAM)g_icon);
     ShowWindow(hwnd,SW_SHOWNORMAL); UpdateWindow(hwnd);
