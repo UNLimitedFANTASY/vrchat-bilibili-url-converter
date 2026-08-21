@@ -1,5 +1,5 @@
 /*
- * Bili URL Converter v1.3.0 Portable - Feedback Modes + Polished UI
+ * Bili URL Converter v1.4.0 Portable - Dual Conversion Modes + Polished UI
  * Native Win32, no CRT, no .NET, no OLE/COM, no registry configuration.
  * Supports x86 and x64 from the same source.
  */
@@ -242,6 +242,7 @@ typedef struct tagMONITORINFO {
 #define IDC_PFX_SAVE        2002
 #define IDC_PFX_DEFAULT     2003
 #define IDC_PFX_CANCEL      2004
+#define IDC_PFX_BV_MODE     2005
 
 #define IDC_CLOSE_REMEMBER  3001
 #define IDC_CLOSE_TRAY      3002
@@ -256,6 +257,7 @@ typedef struct tagMONITORINFO {
 #define IDM_START_HIDDEN    4006
 #define IDM_AUTO_SHOW       4007
 #define IDM_AUTO_NOTIFY     4008
+#define IDM_BV_MODE         4009
 
 /* Win32 imports */
 DLLIMPORT void WINAPI ExitProcess(UINT);
@@ -346,18 +348,19 @@ void *memcpy(void *dst, const void *src, SIZE_T n) {
     BYTE *d=(BYTE*)dst; const BYTE *s=(const BYTE*)src; SIZE_T i; for(i=0;i<n;i++) d[i]=s[i]; return dst;
 }
 
-static const WCHAR APP_TITLE[] = L"VRChat 哔哩哔哩视频链接转换工具 v1.3.0";
+static const WCHAR APP_TITLE[] = L"VRChat 哔哩哔哩视频链接转换工具 v1.4.0";
 static const WCHAR MAIN_CLASS[] = L"VRChatBiliUrlConverter_Main";
-static const WCHAR PREFIX_CLASS[] = L"VRChatBiliUrlConverter_Prefix_130";
-static const WCHAR CLOSE_CLASS[] = L"VRChatBiliUrlConverter_Close_130";
+static const WCHAR PREFIX_CLASS[] = L"VRChatBiliUrlConverter_Prefix_140";
+static const WCHAR CLOSE_CLASS[] = L"VRChatBiliUrlConverter_Close_140";
 static const WCHAR CFG_SECTION[] = L"Settings";
 static const WCHAR DEFAULT_PREFIX[] = L"https://biliplayer.91vrchat.com/player/?url=";
+static const WCHAR DEFAULT_BV_PREFIX[] = L"https://btv.rspark.cn/";
 static const WCHAR CFG_NAME[] = L"BiliUrlConverter.ini";
 
 static HINSTANCE g_inst;
 static HWND g_main, g_source, g_result, g_monitor, g_status, g_startHiddenCheck, g_autoShowCheck, g_autoNotifyCheck;
 static HWND g_btnCopy, g_btnGenerate, g_btnClear, g_btnPrefix, g_btnTray;
-static HWND g_prefixDlg, g_pfxSave, g_pfxDefault, g_pfxCancel;
+static HWND g_prefixDlg, g_pfxSave, g_pfxDefault, g_pfxCancel, g_modeToggle;
 static HWND g_closeDlg, g_closeTray, g_closeExit, g_closeCancel;
 static HICON g_icon;
 static NOTIFYICONDATAW g_nid;
@@ -367,6 +370,8 @@ static BOOL g_monitorEnabled=TRUE;
 static BOOL g_startHidden=FALSE;
 static BOOL g_autoShowWindow=TRUE;
 static BOOL g_autoNotify=TRUE;
+static BOOL g_bvMode=FALSE;
+static BOOL g_tempBvMode=FALSE;
 static BOOL g_exiting=FALSE;
 static int g_closeAction=0; /* 0 ask, 1 tray, 2 exit */
 static BOOL g_configWritable=TRUE;
@@ -374,12 +379,16 @@ static HANDLE g_instanceMutex=NULL;
 
 static WCHAR g_configPath[1024];
 static WCHAR g_prefix[2048];
+static WCHAR g_bvPrefix[2048];
 static WCHAR g_sourceBuf[4096];
 static WCHAR g_resultBuf[8192];
 static WCHAR g_clipBuf[8192];
 static WCHAR g_lastGenerated[8192];
 static WCHAR g_tempPrefix[2048];
+static WCHAR g_tempBvPrefix[2048];
 static WCHAR g_foundBuf[4096];
+static WCHAR g_bvBuf[16];
+static int g_buildError=0; /* 0 none, 1 BV missing, 2 output too long */
 
 static BOOL g_modalDone=FALSE;
 static int g_modalResult=0;
@@ -394,7 +403,7 @@ static void SetCtlFont(HWND h,HFONT f);
 #define BASE_MAIN_W   940
 #define BASE_MAIN_H   720
 #define BASE_PREFIX_W 660
-#define BASE_PREFIX_H 315
+#define BASE_PREFIX_H 420
 #define BASE_CLOSE_W  560
 #define BASE_CLOSE_H  340
 
@@ -514,12 +523,13 @@ static HWND MakeToggle(HWND parent,LPCWSTR text,int x,int y,int w,int h,int id){
     HWND b=CreateWindowExW(0,L"BUTTON",text,WS_CHILD|WS_VISIBLE|WS_TABSTOP|WS_CLIPSIBLINGS|BS_OWNERDRAW,S(x),S(y),S(w),S(h),parent,(HMENU)(ULONG_PTR)id,g_inst,0);
     SetCtlFont(b,g_fontNormal); return b;
 }
-static BOOL IsToggleId(int id){ return id==IDC_MONITOR||id==IDC_START_HIDDEN||id==IDC_AUTO_SHOW||id==IDC_AUTO_NOTIFY; }
+static BOOL IsToggleId(int id){ return id==IDC_MONITOR||id==IDC_START_HIDDEN||id==IDC_AUTO_SHOW||id==IDC_AUTO_NOTIFY||id==IDC_PFX_BV_MODE; }
 static BOOL ToggleOnById(int id){
     if(id==IDC_MONITOR)return g_monitorEnabled;
     if(id==IDC_START_HIDDEN)return g_startHidden;
     if(id==IDC_AUTO_SHOW)return g_autoShowWindow;
     if(id==IDC_AUTO_NOTIFY)return g_autoNotify;
+    if(id==IDC_PFX_BV_MODE)return g_tempBvMode;
     return FALSE;
 }
 static void DrawTextUi(HDC dc,LPCWSTR text,int l,int t,int r,int b,HFONT font,DWORD color,UINT flags){
@@ -570,7 +580,7 @@ static void LayoutMainControls(void){
     MoveCtl(g_status,116,653,758,20); SetEditMargins(g_source); SetEditMargins(g_result);
 }
 static void LayoutPrefixControls(void){
-    MoveCtl(g_prefixEdit,48,144,564,22); MoveCtl(g_pfxSave,42,216,168,42); MoveCtl(g_pfxDefault,226,216,142,42); MoveCtl(g_pfxCancel,384,216,112,42); SetEditMargins(g_prefixEdit);
+    MoveCtl(g_modeToggle,44,123,572,38); MoveCtl(g_prefixEdit,48,240,564,22); MoveCtl(g_pfxSave,42,318,168,42); MoveCtl(g_pfxDefault,226,318,142,42); MoveCtl(g_pfxCancel,384,318,112,42); SetEditMargins(g_prefixEdit);
 }
 static void LayoutCloseControls(void){
     MoveCtl(g_closeRemember,44,188,340,30); MoveCtl(g_closeTray,44,238,190,42); MoveCtl(g_closeExit,250,238,132,42); MoveCtl(g_closeCancel,398,238,100,42);
@@ -612,7 +622,7 @@ static void PaintMainUi(HWND hwnd,HDC dc){
     DrawTextUi(dc,L"VRChat 哔哩哔哩视频链接转换工具",92,18,670,52,g_fontTitle,CLR_TEXT,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
     DrawTextUi(dc,L"VRChat 视频播放器链接转换 · 本地运行 · Portable",92,53,710,79,g_fontSubtitle,CLR_MUTED,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
     DrawRoundBoxUi(dc,755,25,900,59,g_brAccentLight,g_penAccent,17);
-    DrawTextUi(dc,L"v1.3.0  PORTABLE",765,25,890,59,g_fontSmall,CLR_ACCENT_DARK,DT_CENTER|DT_VCENTER|DT_SINGLELINE);
+    DrawTextUi(dc,L"v1.4.0  PORTABLE",765,25,890,59,g_fontSmall,CLR_ACCENT_DARK,DT_CENTER|DT_VCENTER|DT_SINGLELINE);
 
     /* Conversion card */
     DrawRoundBoxUi(dc,29,124,915,394,g_brDisabled,g_penBorder,20);
@@ -621,8 +631,8 @@ static void PaintMainUi(HWND hwnd,HDC dc){
     DrawTextUi(dc,L"01",48,137,82,167,g_fontSmall,CLR_ACCENT_DARK,DT_CENTER|DT_VCENTER|DT_SINGLELINE);
     DrawTextUi(dc,L"网址转换",94,136,220,166,g_fontSection,CLR_TEXT,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
     DrawTextUi(dc,L"粘贴原始网址，或让剪贴板监听在后台自动完成转换。",205,139,700,165,g_fontSmall,CLR_MUTED,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
-    DrawRoundBoxUi(dc,774,138,888,166,defPrefix?g_brDisabled:g_brAccentLight,defPrefix?g_penBorder:g_penAccent,14);
-    DrawTextUi(dc,defPrefix?L"默认前缀":L"自定义前缀",782,138,880,166,g_fontSmall,defPrefix?CLR_MUTED:CLR_ACCENT_DARK,DT_CENTER|DT_VCENTER|DT_SINGLELINE);
+    DrawRoundBoxUi(dc,754,138,888,166,g_bvMode?g_brAccentLight:(defPrefix?g_brDisabled:g_brAccentLight),g_bvMode?g_penAccent:(defPrefix?g_penBorder:g_penAccent),14);
+    DrawTextUi(dc,g_bvMode?L"BV 号模式":(defPrefix?L"完整网址模式":L"自定义前缀"),762,138,880,166,g_fontSmall,g_bvMode?CLR_ACCENT_DARK:(defPrefix?CLR_MUTED:CLR_ACCENT_DARK),DT_CENTER|DT_VCENTER|DT_SINGLELINE);
 
     DrawTextUi(dc,L"原始网址",52,171,180,193,g_fontSmall,CLR_MUTED,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
     DrawRoundBoxUi(dc,48,192,892,238,g_brCard,g_penBorder,11);
@@ -674,9 +684,14 @@ static void PaintMainUi(HWND hwnd,HDC dc){
 }
 static void PaintPrefixUi(HWND hwnd,HDC dc){
     RECT rc; GetClientRect(hwnd,&rc); FillRect(dc,&rc,g_brBg); {RECT h=rc;h.left=0;h.top=0;h.bottom=S(76);FillRect(dc,&h,g_brHeader);h.top=S(74);h.bottom=S(76);FillRect(dc,&h,g_brAccent);}
-    DrawTextUi(dc,L"修改网址前缀",28,17,300,47,g_fontTitle,CLR_TEXT,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
-    DrawTextUi(dc,L"只有在这个独立窗口中才能编辑，避免主界面误触。",28,46,610,68,g_fontSmall,CLR_MUTED,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
-    DrawRoundBoxUi(dc,24,92,636,196,g_brCard,g_penBorder,16); DrawTextUi(dc,L"网址前缀",44,108,150,130,g_fontSmall,CLR_MUTED,DT_LEFT|DT_VCENTER|DT_SINGLELINE); DrawRoundBoxUi(dc,42,134,618,176,g_brCard,g_penBorder,9);
+    DrawTextUi(dc,L"转换设置",28,17,300,47,g_fontTitle,CLR_TEXT,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
+    DrawTextUi(dc,L"选择完整网址拼接，或自动提取 BV 号进行转换。",28,46,610,68,g_fontSmall,CLR_MUTED,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
+    DrawRoundBoxUi(dc,24,92,636,178,g_brCard,g_penBorder,16);
+    DrawTextUi(dc,L"转换模式",44,102,150,122,g_fontSmall,CLR_MUTED,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
+    DrawRoundBoxUi(dc,24,192,636,292,g_brCard,g_penBorder,16);
+    DrawTextUi(dc,g_tempBvMode?L"BV 号模式前缀":L"完整网址模式前缀",44,204,250,228,g_fontSmall,CLR_MUTED,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
+    DrawRoundBoxUi(dc,42,230,618,272,g_brCard,g_penBorder,9);
+    DrawTextUi(dc,g_tempBvMode?L"示例：https://btv.rspark.cn/BV1DY4y1F7Tq":L"生成结果 = 此前缀 + 原始哔哩哔哩网址",44,275,618,290,g_fontTiny,CLR_MUTED,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
 }
 static void PaintCloseUi(HWND hwnd,HDC dc){
     RECT rc; GetClientRect(hwnd,&rc); FillRect(dc,&rc,g_brBg); {RECT h=rc;h.left=0;h.top=0;h.bottom=S(76);FillRect(dc,&h,g_brHeader);h.top=S(74);h.bottom=S(76);FillRect(dc,&h,g_brAccent);}
@@ -744,19 +759,24 @@ static void LoadSettings(void){
     WCHAR b[32]; BuildConfigPath();
     GetPrivateProfileStringW(CFG_SECTION,L"Prefix",DEFAULT_PREFIX,g_prefix,2047,g_configPath);
     if(g_prefix[0]==0) wcopy(g_prefix,DEFAULT_PREFIX,2048);
+    GetPrivateProfileStringW(CFG_SECTION,L"BvPrefix",DEFAULT_BV_PREFIX,g_bvPrefix,2047,g_configPath);
+    if(g_bvPrefix[0]==0) wcopy(g_bvPrefix,DEFAULT_BV_PREFIX,2048);
     GetPrivateProfileStringW(CFG_SECTION,L"Monitor",L"1",b,31,g_configPath); g_monitorEnabled=(w_to_int(b,1)!=0);
     GetPrivateProfileStringW(CFG_SECTION,L"StartHidden",L"0",b,31,g_configPath); g_startHidden=(w_to_int(b,0)!=0);
     GetPrivateProfileStringW(CFG_SECTION,L"AutoShowWindow",L"1",b,31,g_configPath); g_autoShowWindow=(w_to_int(b,1)!=0);
     GetPrivateProfileStringW(CFG_SECTION,L"AutoNotify",L"1",b,31,g_configPath); g_autoNotify=(w_to_int(b,1)!=0);
+    GetPrivateProfileStringW(CFG_SECTION,L"ConversionMode",L"0",b,31,g_configPath); g_bvMode=(w_to_int(b,0)==1);
     GetPrivateProfileStringW(CFG_SECTION,L"CloseAction",L"0",b,31,g_configPath); g_closeAction=w_to_int(b,0); if(g_closeAction<0||g_closeAction>2)g_closeAction=0;
     /* Create/refresh portable config. Failure never blocks startup. */
     g_configWritable=TRUE;
-    if(!SaveSetting(L"Version",L"1.3.0")) g_configWritable=FALSE;
+    if(!SaveSetting(L"Version",L"1.4.0")) g_configWritable=FALSE;
     if(!SaveSetting(L"Prefix",g_prefix)) g_configWritable=FALSE;
+    if(!SaveSetting(L"BvPrefix",g_bvPrefix)) g_configWritable=FALSE;
     if(!SaveSetting(L"Monitor",g_monitorEnabled?L"1":L"0")) g_configWritable=FALSE;
     if(!SaveSetting(L"StartHidden",g_startHidden?L"1":L"0")) g_configWritable=FALSE;
     if(!SaveSetting(L"AutoShowWindow",g_autoShowWindow?L"1":L"0")) g_configWritable=FALSE;
     if(!SaveSetting(L"AutoNotify",g_autoNotify?L"1":L"0")) g_configWritable=FALSE;
+    if(!SaveSetting(L"ConversionMode",g_bvMode?L"1":L"0")) g_configWritable=FALSE;
     { WCHAR c[16]; int_to_w(g_closeAction,c); if(!SaveSetting(L"CloseAction",c)) g_configWritable=FALSE; }
 }
 
@@ -801,7 +821,41 @@ static BOOL ExtractBiliUrl(const WCHAR *text,WCHAR *out,int cap){
     }
     out[0]=0; return FALSE;
 }
-static BOOL BuildGenerated(const WCHAR *source){ return append_two(g_prefix,source,g_resultBuf,8192); }
+static BOOL IsAsciiAlphaNum(WCHAR c){
+    return (c>=L'0'&&c<=L'9')||(c>=L'a'&&c<=L'z')||(c>=L'A'&&c<=L'Z');
+}
+static BOOL CopyBvTokenAt(const WCHAR *source,int pos,WCHAR *out,int cap){
+    int i;
+    if(cap<13||lower_ascii(source[pos])!=L'b'||lower_ascii(source[pos+1])!=L'v') return FALSE;
+    for(i=2;i<12;i++) if(!IsAsciiAlphaNum(source[pos+i])) return FALSE;
+    if(IsAsciiAlphaNum(source[pos+12])) return FALSE;
+    out[0]=L'B'; out[1]=L'V';
+    for(i=2;i<12;i++) out[i]=source[pos+i];
+    out[12]=0; return TRUE;
+}
+static BOOL ExtractBvId(const WCHAR *source,WCHAR *out,int cap){
+    int i=0;
+    if(CopyBvTokenAt(source,0,out,cap)) return TRUE;
+    while(source[i]){
+        if(wstarts_ci(source+i,L"/video/") && CopyBvTokenAt(source,i+7,out,cap)) return TRUE;
+        i++;
+    }
+    out[0]=0; return FALSE;
+}
+static BOOL BuildGenerated(const WCHAR *source){
+    g_buildError=0;
+    if(g_bvMode){
+        if(!ExtractBvId(source,g_bvBuf,16)){g_buildError=1;g_resultBuf[0]=0;return FALSE;}
+        if(!append_two(g_bvPrefix,g_bvBuf,g_resultBuf,8192)){g_buildError=2;return FALSE;}
+        return TRUE;
+    }
+    if(!append_two(g_prefix,source,g_resultBuf,8192)){g_buildError=2;return FALSE;}
+    return TRUE;
+}
+static LPCWSTR BuildErrorText(void){
+    if(g_buildError==1) return L"当前为 BV 号模式，但网址中没有可提取的 BV 号。b23.tv 短链接需先在浏览器中展开。";
+    return L"网址过长，无法生成。请缩短自定义前缀后重试。";
+}
 
 /* ---------------- Clipboard ---------------- */
 /* Clipboard ownership on Windows is exclusive. Browsers, IMEs, screenshot tools,
@@ -861,7 +915,7 @@ static void AddTrayIcon(void){
     memset(&g_nid,0,sizeof(g_nid));
     g_nid.cbSize=(DWORD)sizeof(g_nid); g_nid.hWnd=g_main; g_nid.uID=1;
     g_nid.uFlags=NIF_MESSAGE|NIF_ICON|NIF_TIP; g_nid.uCallbackMessage=WM_TRAYICON; g_nid.hIcon=g_icon;
-    FillFixed(g_nid.szTip,128,L"VRChat 哔哩哔哩视频链接转换工具 v1.3.0");
+    FillFixed(g_nid.szTip,128,L"VRChat 哔哩哔哩视频链接转换工具 v1.4.0");
     if(Shell_NotifyIconW(NIM_ADD,&g_nid)) g_trayAdded=TRUE;
 }
 static void RemoveTrayIcon(void){ if(g_trayAdded){Shell_NotifyIconW(NIM_DELETE,&g_nid);g_trayAdded=FALSE;} }
@@ -921,6 +975,15 @@ static void SetAutoNotify(BOOL enabled,BOOL persist){
         else SetWindowTextW(g_status,g_autoNotify?L"自动转换完成后会发送系统托盘通知。":L"自动转换完成后不会发送系统通知。");
     }
 }
+static void SetBvMode(BOOL enabled,BOOL persist){
+    g_bvMode=enabled?TRUE:FALSE;
+    RefreshMainVisualState();
+    if(persist){
+        SaveIntSetting(L"ConversionMode",g_bvMode?1:0);
+        if(!g_configWritable) SetWindowTextW(g_status,L"转换模式已临时修改，但当前目录不可写，无法保存。");
+        else SetWindowTextW(g_status,g_bvMode?L"已切换为 BV 号模式：自动提取 BV 号并使用设置的服务地址。":L"已切换为完整网址模式：使用网址前缀拼接原始链接。");
+    }
+}
 
 /* ---------------- Monitor ---------------- */
 static void UpdateMonitorUI(void){ RefreshControlNow(g_monitor); RefreshMainVisualState(); }
@@ -950,13 +1013,14 @@ static void HandleClipboardUpdate(void){
     trim_ws(g_clipBuf);
     if(g_clipBuf[0]==0) return;
     if(weq(g_clipBuf,g_lastGenerated)) return;
-    if(wstarts(g_clipBuf,g_prefix)) return;
+    if(wstarts(g_clipBuf,g_prefix)||wstarts(g_clipBuf,g_bvPrefix)) return;
     if(!ExtractBiliUrl(g_clipBuf,g_foundBuf,4096)) return;
     SetEditTextStable(g_source,g_foundBuf); wcopy(g_sourceBuf,g_foundBuf,4096);
     if(!BuildGenerated(g_foundBuf)){
-        SetWindowTextW(g_status,L"网址过长，无法生成。请缩短自定义前缀后重试。");
+        SetEditTextStable(g_result,L"");
+        SetWindowTextW(g_status,BuildErrorText());
         if(g_autoShowWindow) ShowMain();
-        if(g_autoNotify) TrayBalloon(L"自动转换失败",L"网址过长，无法生成转换后的链接。");
+        if(g_autoNotify) TrayBalloon(L"自动转换失败",g_buildError==1?L"网址中没有可提取的 BV 号。":L"网址过长，无法生成转换后的链接。");
         return;
     }
     SetEditTextStable(g_result,g_resultBuf);
@@ -979,16 +1043,15 @@ static void SetEditTextStable(HWND h,const WCHAR *text){
     InvalidateRect(h,NULL,TRUE);
     UpdateWindow(h);
 }
-
 /* ---------------- Actions ---------------- */
 static void GenerateManual(BOOL doCopy){
     int n=GetWindowTextW(g_source,g_sourceBuf,4095); (void)n; trim_ws(g_sourceBuf);
     if(g_sourceBuf[0]==0){ SetWindowTextW(g_status,L"请先粘贴原始网址。"); SetFocus(g_source); return; }
-    if(!BuildGenerated(g_sourceBuf)){ SetWindowTextW(g_status,L"网址过长，无法生成。请缩短自定义前缀。"); return; }
+    if(!BuildGenerated(g_sourceBuf)){ SetEditTextStable(g_result,L""); SetWindowTextW(g_status,BuildErrorText()); return; }
     SetEditTextStable(g_result,g_resultBuf);
     if(doCopy){
         if(CopyToClipboard(g_main,g_resultBuf)) SetWindowTextW(g_status,L"新网址已生成并复制到剪贴板。");
-    }else SetWindowTextW(g_status,L"已按新的前缀刷新生成结果。");
+    }else SetWindowTextW(g_status,g_bvMode?L"已提取 BV 号并刷新生成结果。":L"已按新的前缀刷新生成结果。");
 }
 static void CopyResult(void){
     GetWindowTextW(g_result,g_resultBuf,8191); if(g_resultBuf[0]==0){SetWindowTextW(g_status,L"当前没有可复制的生成结果。");return;}
@@ -1002,10 +1065,13 @@ static LRESULT CALLBACK PrefixProc2(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
     switch(msg){
     case WM_CREATE:
         g_prefixDlg=hwnd;
-        g_prefixEdit=CreateWindowExW(0,L"EDIT",g_prefix,WS_CHILD|WS_VISIBLE|WS_TABSTOP|WS_CLIPSIBLINGS|ES_AUTOHSCROLL,S(48),S(144),S(564),S(22),hwnd,(HMENU)(ULONG_PTR)IDC_PFX_EDIT,g_inst,0);
+        g_tempBvMode=g_bvMode;
+        wcopy(g_tempPrefix,g_prefix,2048); wcopy(g_tempBvPrefix,g_bvPrefix,2048);
+        g_modeToggle=MakeToggle(hwnd,L"BV 号模式（关闭时使用完整网址模式）",44,123,572,38,IDC_PFX_BV_MODE);
+        g_prefixEdit=CreateWindowExW(0,L"EDIT",g_tempBvMode?g_tempBvPrefix:g_tempPrefix,WS_CHILD|WS_VISIBLE|WS_TABSTOP|WS_CLIPSIBLINGS|ES_AUTOHSCROLL,S(48),S(240),S(564),S(22),hwnd,(HMENU)(ULONG_PTR)IDC_PFX_EDIT,g_inst,0);
         SendMessageW(g_prefixEdit,EM_SETLIMITTEXT,1900,0); SetCtlFont(g_prefixEdit,g_fontNormal); SetEditMargins(g_prefixEdit);
-        g_pfxSave=MakeButton(hwnd,L"保存并应用",42,216,168,42,IDC_PFX_SAVE); g_pfxDefault=MakeButton(hwnd,L"恢复默认",226,216,142,42,IDC_PFX_DEFAULT); g_pfxCancel=MakeButton(hwnd,L"取消",384,216,112,42,IDC_PFX_CANCEL);
-        SetFocus(g_prefixEdit); return 0;
+        g_pfxSave=MakeButton(hwnd,L"保存并应用",42,318,168,42,IDC_PFX_SAVE); g_pfxDefault=MakeButton(hwnd,L"恢复默认",226,318,142,42,IDC_PFX_DEFAULT); g_pfxCancel=MakeButton(hwnd,L"取消",384,318,112,42,IDC_PFX_CANCEL);
+        SetFocus(g_modeToggle); return 0;
     case WM_DPICHANGED:
         { UINT nd=(UINT)(wp&0xffff); SetUiDpi(nd); ApplySuggestedDpiRect(hwnd,lp); LayoutPrefixControls(); InvalidateRect(hwnd,NULL,TRUE); return 0; }
     case WM_PAINT:
@@ -1015,17 +1081,25 @@ static LRESULT CALLBACK PrefixProc2(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
     case WM_CTLCOLOREDIT: SetBkColor((HDC)wp,CLR_CARD); SetTextColor((HDC)wp,CLR_TEXT); return (LRESULT)g_brCard;
     case WM_COMMAND:
         switch((int)(wp&0xffff)){
+        case IDC_PFX_BV_MODE:
+            GetWindowTextW(g_prefixEdit,g_tempBvMode?g_tempBvPrefix:g_tempPrefix,2047);
+            g_tempBvMode=!g_tempBvMode;
+            SetWindowTextW(g_prefixEdit,g_tempBvMode?g_tempBvPrefix:g_tempPrefix);
+            RefreshControlNow(g_modeToggle); InvalidateRect(hwnd,NULL,TRUE); return 0;
         case IDC_PFX_SAVE:
-            GetWindowTextW(g_prefixEdit,g_tempPrefix,2047); trim_ws(g_tempPrefix);
-            if(g_tempPrefix[0]==0){MessageBoxW(hwnd,L"前缀不能为空。",APP_TITLE,MB_OK|MB_ICONWARNING);return 0;}
-            if(!SaveSetting(L"Prefix",g_tempPrefix)){ MessageBoxW(hwnd,L"无法在程序目录写入 BiliUrlConverter.ini。\n\n请把程序移动到桌面、下载目录或其他有写入权限的位置后再试。",APP_TITLE,MB_OK|MB_ICONERROR);return 0; }
-            wcopy(g_prefix,g_tempPrefix,2048); g_modalResult=1; g_modalDone=TRUE; DestroyWindow(hwnd); return 0;
-        case IDC_PFX_DEFAULT: SetWindowTextW(g_prefixEdit,DEFAULT_PREFIX); SetFocus(g_prefixEdit); return 0;
+            GetWindowTextW(g_prefixEdit,g_tempBvMode?g_tempBvPrefix:g_tempPrefix,2047);
+            trim_ws(g_tempPrefix); trim_ws(g_tempBvPrefix);
+            if(g_tempPrefix[0]==0||g_tempBvPrefix[0]==0){MessageBoxW(hwnd,L"网址前缀不能为空。",APP_TITLE,MB_OK|MB_ICONWARNING);return 0;}
+            if(!SaveSetting(L"Prefix",g_tempPrefix)||!SaveSetting(L"BvPrefix",g_tempBvPrefix)){ MessageBoxW(hwnd,L"无法在程序目录写入 BiliUrlConverter.ini。\n\n请把程序移动到桌面、下载目录或其他有写入权限的位置后再试。",APP_TITLE,MB_OK|MB_ICONERROR);return 0; }
+            wcopy(g_prefix,g_tempPrefix,2048); wcopy(g_bvPrefix,g_tempBvPrefix,2048);
+            if(!SaveSetting(L"ConversionMode",g_tempBvMode?L"1":L"0")){ MessageBoxW(hwnd,L"无法保存转换模式。请确认程序目录具有写入权限。",APP_TITLE,MB_OK|MB_ICONERROR);return 0; }
+            g_bvMode=g_tempBvMode; g_modalResult=1; g_modalDone=TRUE; DestroyWindow(hwnd); return 0;
+        case IDC_PFX_DEFAULT: SetWindowTextW(g_prefixEdit,g_tempBvMode?DEFAULT_BV_PREFIX:DEFAULT_PREFIX); SetFocus(g_prefixEdit); return 0;
         case IDC_PFX_CANCEL: g_modalResult=0; g_modalDone=TRUE; DestroyWindow(hwnd); return 0;
         }
         break;
     case WM_CLOSE: g_modalResult=0; g_modalDone=TRUE; DestroyWindow(hwnd); return 0;
-    case WM_DESTROY: g_modalDone=TRUE; g_prefixEdit=NULL; g_prefixDlg=NULL; g_pfxSave=g_pfxDefault=g_pfxCancel=NULL; return 0;
+    case WM_DESTROY: g_modalDone=TRUE; g_prefixEdit=NULL; g_prefixDlg=NULL; g_modeToggle=NULL; g_pfxSave=g_pfxDefault=g_pfxCancel=NULL; return 0;
     }
     return DefWindowProcW(hwnd,msg,wp,lp);
 }
@@ -1039,9 +1113,14 @@ static int RunModal(HWND dlg){
 }
 static void ShowPrefixDialog(void){
     HWND dlg; int x,y,w,h; UINT d=GetWindowDpiSafe(g_main); SetUiDpi(d); CenterPopupOnOwner(g_main,BASE_PREFIX_W,BASE_PREFIX_H,d,&x,&y,&w,&h); RegisterPrefixClass();
-    dlg=CreateWindowExW(WS_EX_DLGMODALFRAME|WS_EX_TOPMOST,PREFIX_CLASS,L"修改网址前缀",WS_POPUP|WS_CAPTION|WS_SYSMENU|WS_CLIPCHILDREN,x,y,w,h,g_main,NULL,g_inst,NULL);
-    if(!dlg){MessageBoxW(g_main,L"无法打开前缀设置窗口。",APP_TITLE,MB_OK|MB_ICONERROR);return;}
-    if(RunModal(dlg)==1){ GenerateManual(FALSE); SetWindowTextW(g_status,L"网址前缀已保存并应用。配置位于程序运行目录。"); InvalidateRect(g_main,NULL,FALSE); }
+    dlg=CreateWindowExW(WS_EX_DLGMODALFRAME|WS_EX_TOPMOST,PREFIX_CLASS,L"转换设置",WS_POPUP|WS_CAPTION|WS_SYSMENU|WS_CLIPCHILDREN,x,y,w,h,g_main,NULL,g_inst,NULL);
+    if(!dlg){MessageBoxW(g_main,L"无法打开转换设置窗口。",APP_TITLE,MB_OK|MB_ICONERROR);return;}
+    if(RunModal(dlg)==1){
+        GetWindowTextW(g_source,g_sourceBuf,4095); trim_ws(g_sourceBuf);
+        if(g_sourceBuf[0]) GenerateManual(FALSE);
+        else SetWindowTextW(g_status,g_bvMode?L"BV 号模式已保存并应用。":L"完整网址模式已保存并应用。");
+        InvalidateRect(g_main,NULL,FALSE);
+    }
 }
 
 /* ---------------- Close dialog ---------------- */
@@ -1091,7 +1170,9 @@ static void ShowTrayMenu(void){
     AppendMenuW(menu,MF_SEPARATOR,0,NULL);
     AppendMenuW(menu,MF_STRING|(g_autoShowWindow?MF_CHECKED:MF_UNCHECKED),IDM_AUTO_SHOW,L"自动转换后显示主窗口");
     AppendMenuW(menu,MF_STRING|(g_autoNotify?MF_CHECKED:MF_UNCHECKED),IDM_AUTO_NOTIFY,L"自动转换后显示通知");
-    AppendMenuW(menu,MF_STRING,IDM_PREFIX,L"修改网址前缀...");
+    AppendMenuW(menu,MF_SEPARATOR,0,NULL);
+    AppendMenuW(menu,MF_STRING|(g_bvMode?MF_CHECKED:MF_UNCHECKED),IDM_BV_MODE,L"BV 号转换模式");
+    AppendMenuW(menu,MF_STRING,IDM_PREFIX,L"转换设置...");
     AppendMenuW(menu,MF_STRING,IDM_CLOSE_ASK,L"关闭时再次询问");
     AppendMenuW(menu,MF_SEPARATOR,0,NULL);
     AppendMenuW(menu,MF_STRING,IDM_EXIT,L"退出程序");
@@ -1103,6 +1184,11 @@ static void ShowTrayMenu(void){
     else if(cmd==IDM_START_HIDDEN) SetStartHidden(!g_startHidden,TRUE);
     else if(cmd==IDM_AUTO_SHOW) SetAutoShowWindow(!g_autoShowWindow,TRUE);
     else if(cmd==IDM_AUTO_NOTIFY) SetAutoNotify(!g_autoNotify,TRUE);
+    else if(cmd==IDM_BV_MODE){
+        SetBvMode(!g_bvMode,TRUE);
+        GetWindowTextW(g_source,g_sourceBuf,4095); trim_ws(g_sourceBuf);
+        if(g_sourceBuf[0]) GenerateManual(FALSE);
+    }
     else if(cmd==IDM_PREFIX) ShowPrefixDialog();
     else if(cmd==IDM_CLOSE_ASK){g_closeAction=0;SaveIntSetting(L"CloseAction",0);SetWindowTextW(g_status,L"已恢复：点击关闭按钮时再次询问。");}
     else if(cmd==IDM_EXIT) ReallyExit();
@@ -1115,7 +1201,7 @@ static LRESULT CALLBACK MainProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
         g_main=hwnd; SetUiDpi(GetWindowDpiSafe(hwnd));
         g_source=CreateWindowExW(0,L"EDIT",L"",WS_CHILD|WS_VISIBLE|WS_TABSTOP|WS_CLIPSIBLINGS|ES_AUTOHSCROLL,S(54),S(204),S(832),S(22),hwnd,(HMENU)(ULONG_PTR)IDC_SOURCE,g_inst,0); SendMessageW(g_source,EM_SETLIMITTEXT,3900,0); SetCtlFont(g_source,g_fontNormal); SetEditMargins(g_source);
         g_result=CreateWindowExW(0,L"EDIT",L"",WS_CHILD|WS_VISIBLE|WS_TABSTOP|WS_CLIPSIBLINGS|ES_AUTOHSCROLL|ES_READONLY,S(54),S(284),S(642),S(22),hwnd,(HMENU)(ULONG_PTR)IDC_RESULT,g_inst,0); SetCtlFont(g_result,g_fontNormal); SetEditMargins(g_result);
-        g_btnCopy=MakeButton(hwnd,L"复制结果",714,272,174,46,IDC_COPY); g_btnGenerate=MakeButton(hwnd,L"生成并复制",50,334,188,46,IDC_GENERATE); g_btnClear=MakeButton(hwnd,L"清空",254,334,108,46,IDC_CLEAR); g_btnPrefix=MakeButton(hwnd,L"修改网址前缀",574,334,164,46,IDC_PREFIX); g_btnTray=MakeButton(hwnd,L"最小化到托盘",752,334,136,46,IDC_TRAY);
+        g_btnCopy=MakeButton(hwnd,L"复制结果",714,272,174,46,IDC_COPY); g_btnGenerate=MakeButton(hwnd,L"生成并复制",50,334,188,46,IDC_GENERATE); g_btnClear=MakeButton(hwnd,L"清空",254,334,108,46,IDC_CLEAR); g_btnPrefix=MakeButton(hwnd,L"转换设置",574,334,164,46,IDC_PREFIX); g_btnTray=MakeButton(hwnd,L"最小化到托盘",752,334,136,46,IDC_TRAY);
         g_monitor=MakeToggle(hwnd,L"自动监听哔哩哔哩剪贴板网址",58,518,378,34,IDC_MONITOR);
         g_startHiddenCheck=MakeToggle(hwnd,L"启动后自动隐藏到托盘",58,558,378,34,IDC_START_HIDDEN);
         g_autoShowCheck=MakeToggle(hwnd,L"自动转换后显示主窗口",490,518,386,34,IDC_AUTO_SHOW);
@@ -1133,7 +1219,14 @@ static LRESULT CALLBACK MainProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
         SetBkMode((HDC)wp,TRANSPARENT); SetTextColor((HDC)wp,CLR_MUTED); if((HWND)lp==g_result){SetBkColor((HDC)wp,CLR_CARD);SetTextColor((HDC)wp,CLR_TEXT);return (LRESULT)g_brCard;} return (LRESULT)g_brBg;
     case WM_CTLCOLORBTN: SetBkColor((HDC)wp,CLR_CARD); SetTextColor((HDC)wp,CLR_TEXT); return (LRESULT)g_brCard;
     case WM_COMMAND:
-        if(((wp>>16)&0xffff)==BN_CLICKED){ int id=(int)(wp&0xffff); if(id==IDC_GENERATE){GenerateManual(TRUE);return 0;} if(id==IDC_COPY){CopyResult();return 0;} if(id==IDC_CLEAR){ClearAll();return 0;} if(id==IDC_PREFIX){ShowPrefixDialog();return 0;} if(id==IDC_TRAY){HideToTray();return 0;} if(id==IDC_MONITOR){SetMonitor(!g_monitorEnabled,TRUE);return 0;} if(id==IDC_START_HIDDEN){SetStartHidden(!g_startHidden,TRUE);return 0;} if(id==IDC_AUTO_SHOW){SetAutoShowWindow(!g_autoShowWindow,TRUE);return 0;} if(id==IDC_AUTO_NOTIFY){SetAutoNotify(!g_autoNotify,TRUE);return 0;} }
+        { int id=(int)(wp&0xffff),code=(int)((wp>>16)&0xffff);
+#ifdef TEST_ALLOW_PARALLEL
+          if(id==9001){ g_bvMode=TRUE; if(BuildGenerated(L"https://www.bilibili.com/video/BV1DY4y1F7Tq/?spm_id_from=333.788.player.player_end_recommend_autoplay&trackid=web_related_0.router-related-2589621-z4htq.1787061840643.104&vd_source=bd23d543a2df7791f9fcedc11a1e4a87")) SetWindowTextW(g_status,g_resultBuf); else SetWindowTextW(g_status,BuildErrorText()); return 0; }
+          if(id==9002){ g_bvMode=TRUE; if(BuildGenerated(L"BV1DY4y1F7Tq")) SetWindowTextW(g_status,g_resultBuf); else SetWindowTextW(g_status,BuildErrorText()); return 0; }
+          if(id==9003){ g_bvMode=TRUE; if(BuildGenerated(L"https://b23.tv/AbCd123")) SetWindowTextW(g_status,g_resultBuf); else SetWindowTextW(g_status,BuildErrorText()); return 0; }
+          if(id==9004){ g_bvMode=FALSE; if(BuildGenerated(L"https://www.bilibili.com/video/BV1DY4y1F7Tq/")) SetWindowTextW(g_status,g_resultBuf); else SetWindowTextW(g_status,BuildErrorText()); return 0; }
+#endif
+          if(code==BN_CLICKED){ if(id==IDC_GENERATE){GenerateManual(TRUE);return 0;} if(id==IDC_COPY){CopyResult();return 0;} if(id==IDC_CLEAR){ClearAll();return 0;} if(id==IDC_PREFIX){ShowPrefixDialog();return 0;} if(id==IDC_TRAY){HideToTray();return 0;} if(id==IDC_MONITOR){SetMonitor(!g_monitorEnabled,TRUE);return 0;} if(id==IDC_START_HIDDEN){SetStartHidden(!g_startHidden,TRUE);return 0;} if(id==IDC_AUTO_SHOW){SetAutoShowWindow(!g_autoShowWindow,TRUE);return 0;} if(id==IDC_AUTO_NOTIFY){SetAutoNotify(!g_autoNotify,TRUE);return 0;} } }
         break;
     case WM_CLIPBOARDUPDATE: HandleClipboardUpdate(); return 0;
     case WM_SHOW_EXISTING: ShowMain(); return 0;
@@ -1152,7 +1245,11 @@ static BOOL AcquireSingleInstance(void){
     if(k){ pCreateMutexW=(PFN_CreateMutexW)GetProcAddress(k,"CreateMutexW"); pGetLastError=(PFN_GetLastError)GetProcAddress(k,"GetLastError"); }
     if(u) pFindWindowW=(PFN_FindWindowW)GetProcAddress(u,"FindWindowW");
     if(!pCreateMutexW||!pGetLastError) return TRUE; /* 极旧/异常系统：不阻止启动 */
+#ifdef TEST_ALLOW_PARALLEL
+    g_instanceMutex=pCreateMutexW(NULL,FALSE,L"Local\\VRChat_Bilibili_URL_Converter_v140_TestInstance");
+#else
     g_instanceMutex=pCreateMutexW(NULL,FALSE,L"Local\\VRChat_Bilibili_URL_Converter_SingleInstance");
+#endif
     if(!g_instanceMutex) return TRUE;
     if(pGetLastError()==183){ /* ERROR_ALREADY_EXISTS */
         if(pFindWindowW){
@@ -1181,4 +1278,24 @@ static int AppMain(void){
     while(GetMessageW(&m,NULL,0,0)>0){TranslateMessage(&m);DispatchMessageW(&m);} return 0;
 }
 
+#ifdef LOGIC_TEST
+void WINAPI AppEntry(void){
+    wcopy(g_bvPrefix,DEFAULT_BV_PREFIX,2048);
+    g_bvMode=TRUE;
+    if(!BuildGenerated(L"https://www.bilibili.com/video/BV1DY4y1F7Tq/?spm_id_from=333.788.player.player_end_recommend_autoplay&trackid=web_related_0.router-related-2589621-z4htq.1787061840643.104&vd_source=bd23d543a2df7791f9fcedc11a1e4a87")) ExitProcess(11);
+    if(!weq(g_resultBuf,L"https://btv.rspark.cn/BV1DY4y1F7Tq")) ExitProcess(12);
+    if(!BuildGenerated(L"BV1DY4y1F7Tq")||!weq(g_resultBuf,L"https://btv.rspark.cn/BV1DY4y1F7Tq")) ExitProcess(13);
+    if(BuildGenerated(L"https://b23.tv/AbCd123")||g_buildError!=1) ExitProcess(14);
+    if(BuildGenerated(L"https://www.bilibili.com/video/BV1DY4y1F7TqX/")||g_buildError!=1) ExitProcess(15);
+    wcopy(g_bvPrefix,L"https://example.test/watch/",2048);
+    if(!BuildGenerated(L"https://www.bilibili.com/video/BV1DY4y1F7Tq/")||!weq(g_resultBuf,L"https://example.test/watch/BV1DY4y1F7Tq")) ExitProcess(18);
+    wcopy(g_prefix,DEFAULT_PREFIX,2048);
+    g_bvMode=FALSE;
+    if(!BuildGenerated(L"https://www.bilibili.com/video/BV1DY4y1F7Tq/")) ExitProcess(16);
+    if(!weq(g_resultBuf,L"https://biliplayer.91vrchat.com/player/?url=https://www.bilibili.com/video/BV1DY4y1F7Tq/")) ExitProcess(17);
+    ExitProcess(0);
+}
+#else
 void WINAPI AppEntry(void){ int code=AppMain(); ExitProcess((UINT)code); }
+#endif
+
